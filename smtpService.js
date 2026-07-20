@@ -245,9 +245,15 @@ export async function sendMeetingLogEmail(email, username, title, dateTime, tran
               
               <!-- Corporate Brand Header -->
               <tr>
-                <td align="center" style="padding: 32px 20px 20px 20px; background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%);">
-                  <div style="width: 48px; height: 48px; background-color: rgba(255, 255, 255, 0.2); border-radius: 12px; display: inline-flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 800; color: #ffffff; margin-bottom: 12px; font-family: monospace;">A</div>
-                  <h1 style="margin: 0; color: #ffffff; font-size: 20px; font-weight: 800; letter-spacing: 0.5px;">AtlasMeet Log Export</h1>
+                <td align="center" style="padding: 32px 20px 32px 20px; background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%);">
+                  <table border="0" cellpadding="0" cellspacing="0" style="margin-bottom: 12px; display: inline-table;">
+                    <tr>
+                      <td align="center" valign="middle" style="width: 48px; height: 48px; background-color: #ffffff; border-radius: 14px; color: #4f46e5; font-size: 20px; font-weight: 900; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+                        AM
+                      </td>
+                    </tr>
+                  </table>
+                  <h1 style="margin: 0; color: #ffffff; font-size: 22px; font-weight: 800; letter-spacing: 0.5px;">AtlasMeet Log Export</h1>
                 </td>
               </tr>
               
