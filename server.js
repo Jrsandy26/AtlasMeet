@@ -132,7 +132,7 @@ app.post('/api/nvidia/transcribe', async (req, res) => {
     const buffer = Buffer.from(audioBase64, 'base64');
     const formData = new FormData();
     formData.append('file', new Blob([buffer], { type: 'audio/webm' }), 'audio.webm');
-    formData.append('model', model || 'nvidia/whisper-large-v3');
+    formData.append('model', model || 'nvidia/parakeet-tdt-0.6b-v3');
     formData.append('response_format', 'json');
 
     const response = await fetch('https://integrate.api.nvidia.com/v1/audio/transcriptions', {

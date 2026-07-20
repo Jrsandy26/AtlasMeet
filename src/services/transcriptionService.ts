@@ -156,7 +156,7 @@ class TranscriptionService {
     return result.text;
   }
 
-  async transcribeWithNvidia(audioBlob: Blob, apiKey: string, model: string = 'nvidia/whisper-large-v3'): Promise<string> {
+  async transcribeWithNvidia(audioBlob: Blob, apiKey: string, model: string = 'nvidia/parakeet-tdt-0.6b-v3'): Promise<string> {
     const reader = new FileReader();
     const readPromise = new Promise<string>((resolve) => {
       reader.onloadend = () => {

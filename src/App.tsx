@@ -364,7 +364,7 @@ export default function App() {
       // Custom local server needs no API keys
     } else if (isNvidiaEnabled) {
       activeKey = nvidiaKey || 'server_key';
-      activeModelName = 'nvidia/whisper-large-v3';
+      activeModelName = 'nvidia/parakeet-tdt-0.6b-v3';
     } else if (isGroqEnabled) {
       activeKey = groqKey || 'server_key';
       activeModelName = groqModel;
@@ -374,7 +374,7 @@ export default function App() {
     } else if (nvidiaKey || serverConfig?.hasNvidiaKey) {
       activeProvider = 'nvidia';
       activeKey = nvidiaKey || 'server_key';
-      activeModelName = 'nvidia/whisper-large-v3';
+      activeModelName = 'nvidia/parakeet-tdt-0.6b-v3';
     } else if (groqKey || serverConfig?.hasGroqKey) {
       activeProvider = 'groq';
       activeKey = groqKey || 'server_key';
@@ -1113,7 +1113,7 @@ export default function App() {
           const cloudText = await transcriptionService.transcribeWithCustomLocal(blob, transcribeCustomEndpoint);
           await processCloudTranscript(activeMeetingId, cloudText);
         } else if (transcribeProvider === 'nvidia' && (nvidiaKey || serverConfig?.hasNvidiaKey)) {
-          const cloudText = await transcriptionService.transcribeWithNvidia(blob, nvidiaKey, 'nvidia/whisper-large-v3');
+          const cloudText = await transcriptionService.transcribeWithNvidia(blob, nvidiaKey, 'nvidia/parakeet-tdt-0.6b-v3');
           await processCloudTranscript(activeMeetingId, cloudText);
         } else if (transcribeProvider === 'groq' && (groqKey || serverConfig?.hasGroqKey)) {
           const cloudText = await transcriptionService.transcribeWithGroq(blob, groqKey, groqModel);
