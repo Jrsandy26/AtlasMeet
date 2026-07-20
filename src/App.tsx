@@ -571,10 +571,10 @@ export default function App() {
         
         for (let i = 0; i < activeMeetingTranscripts.length; i += batchSize) {
           const batch = activeMeetingTranscripts.slice(i, i + batchSize);
-          const batchText = batch.map(s => s.text).join('\n');
+          const batchText = batch.map(s => s.text).join(' || ');
           
           const translatedBatchText = await translateTextFree(batchText, sourceLang, targetLang);
-          const splitLines = translatedBatchText.split('\n');
+          const splitLines = translatedBatchText.split(/\|\|/);
           
           for (let j = 0; j < batch.length; j++) {
             const original = batch[j];
