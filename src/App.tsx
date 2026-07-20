@@ -1705,7 +1705,10 @@ export default function App() {
           </div>
           
           <button 
-            onClick={() => setIsSettingsOpen(true)}
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsSettingsOpen(true);
+            }}
             className="p-2 hover:bg-slate-800 rounded-lg transition-colors duration-200 text-slate-400 hover:text-white"
             title="Open Settings"
           >
