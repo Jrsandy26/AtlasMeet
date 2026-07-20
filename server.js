@@ -84,7 +84,7 @@ app.post('/api/nvidia/chat', async (req, res) => {
       }
     }
 
-    const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+    let response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -93,12 +93,32 @@ app.post('/api/nvidia/chat', async (req, res) => {
       body: JSON.stringify(req.body)
     });
 
-    const responseText = await response.text();
+    let responseText = await response.text();
     let data;
     try {
       data = JSON.parse(responseText);
     } catch (e) {
       data = { detail: responseText };
+    }
+
+    const requestedModel = req.body.model;
+    if (!response.ok && requestedModel !== 'meta/llama-3.3-70b-instruct') {
+      console.warn(`NVIDIA NIM Chat failed for ${requestedModel}. Falling back to meta/llama-3.3-70b-instruct...`);
+      const fallbackBody = { ...req.body, model: 'meta/llama-3.3-70b-instruct' };
+      response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': apiKey
+        },
+        body: JSON.stringify(fallbackBody)
+      });
+      responseText = await response.text();
+      try {
+        data = JSON.parse(responseText);
+      } catch (e) {
+        data = { detail: responseText };
+      }
     }
 
     if (!response.ok) {
@@ -130,25 +150,41 @@ app.post('/api/nvidia/transcribe', async (req, res) => {
     }
 
     const buffer = Buffer.from(audioBase64, 'base64');
-    const formData = new FormData();
-    formData.append('file', new Blob([buffer], { type: 'audio/webm' }), 'audio.webm');
-    formData.append('model', model || 'nvidia/parakeet-tdt-0.6b-v3');
-    formData.append('response_format', 'json');
+    let activeModel = model || 'nvidia/parakeet-tdt-0.6b-v3';
 
-    const response = await fetch('https://integrate.api.nvidia.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: {
-        'Authorization': apiKey
-      },
-      body: formData
-    });
+    const makeTranscribeRequest = async (modelName) => {
+      const formData = new FormData();
+      formData.append('file', new Blob([buffer], { type: 'audio/webm' }), 'audio.webm');
+      formData.append('model', modelName);
+      formData.append('response_format', 'json');
 
-    const responseText = await response.text();
+      return fetch('https://integrate.api.nvidia.com/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: {
+          'Authorization': apiKey
+        },
+        body: formData
+      });
+    };
+
+    let response = await makeTranscribeRequest(activeModel);
+    let responseText = await response.text();
     let data;
     try {
       data = JSON.parse(responseText);
     } catch (e) {
       data = { detail: responseText };
+    }
+
+    if (!response.ok && activeModel !== 'nvidia/parakeet-tdt-0.6b-v3') {
+      console.warn(`NVIDIA NIM Transcription failed for ${activeModel}. Falling back to nvidia/parakeet-tdt-0.6b-v3...`);
+      response = await makeTranscribeRequest('nvidia/parakeet-tdt-0.6b-v3');
+      responseText = await response.text();
+      try {
+        data = JSON.parse(responseText);
+      } catch (e) {
+        data = { detail: responseText };
+      }
     }
 
     if (!response.ok) {

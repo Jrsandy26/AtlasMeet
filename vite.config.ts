@@ -82,7 +82,7 @@ export default defineConfig({
                 }
 
                 if (url.startsWith('/api/nvidia/chat')) {
-                  const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+                  let response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
                     method: 'POST',
                     headers: {
                       'Content-Type': 'application/json',
@@ -90,37 +90,76 @@ export default defineConfig({
                     },
                     body: JSON.stringify(parsed)
                   });
-                  const responseText = await response.text();
+                  let responseText = await response.text();
                   let data;
                   try {
                     data = JSON.parse(responseText);
                   } catch (e) {
                     data = { detail: responseText };
                   }
+
+                  const requestedModel = parsed.model;
+                  if (!response.ok && requestedModel !== 'meta/llama-3.3-70b-instruct') {
+                    console.warn(`[Dev Proxy] NVIDIA NIM Chat failed for ${requestedModel}. Falling back to meta/llama-3.3-70b-instruct...`);
+                    const fallbackBody = { ...parsed, model: 'meta/llama-3.3-70b-instruct' };
+                    response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': apiKey
+                      },
+                      body: JSON.stringify(fallbackBody)
+                    });
+                    responseText = await response.text();
+                    try {
+                      data = JSON.parse(responseText);
+                    } catch (e) {
+                      data = { detail: responseText };
+                    }
+                  }
+
                   res.writeHead(response.status, { 'Content-Type': 'application/json' });
                   res.end(JSON.stringify(data));
                 } else if (url.startsWith('/api/nvidia/transcribe')) {
                   const { audioBase64, model } = parsed;
                   const buffer = Buffer.from(audioBase64, 'base64');
-                  const formData = new FormData();
-                  formData.append('file', new Blob([buffer], { type: 'audio/webm' }), 'audio.webm');
-                  formData.append('model', model || 'nvidia/parakeet-tdt-0.6b-v3');
-                  formData.append('response_format', 'json');
+                  let activeModel = model || 'nvidia/parakeet-tdt-0.6b-v3';
 
-                  const response = await fetch('https://integrate.api.nvidia.com/v1/audio/transcriptions', {
-                    method: 'POST',
-                    headers: {
-                      'Authorization': apiKey
-                    },
-                    body: formData
-                  });
-                  const responseText = await response.text();
+                  const makeTranscribeRequest = async (modelName: string) => {
+                    const formData = new FormData();
+                    formData.append('file', new Blob([buffer], { type: 'audio/webm' }), 'audio.webm');
+                    formData.append('model', modelName);
+                    formData.append('response_format', 'json');
+
+                    return fetch('https://integrate.api.nvidia.com/v1/audio/transcriptions', {
+                      method: 'POST',
+                      headers: {
+                        'Authorization': apiKey
+                      },
+                      body: formData
+                    });
+                  };
+
+                  let response = await makeTranscribeRequest(activeModel);
+                  let responseText = await response.text();
                   let data;
                   try {
                     data = JSON.parse(responseText);
                   } catch (e) {
                     data = { detail: responseText };
                   }
+
+                  if (!response.ok && activeModel !== 'nvidia/parakeet-tdt-0.6b-v3') {
+                    console.warn(`[Dev Proxy] NVIDIA NIM Transcription failed for ${activeModel}. Falling back to nvidia/parakeet-tdt-0.6b-v3...`);
+                    response = await makeTranscribeRequest('nvidia/parakeet-tdt-0.6b-v3');
+                    responseText = await response.text();
+                    try {
+                      data = JSON.parse(responseText);
+                    } catch (e) {
+                      data = { detail: responseText };
+                    }
+                  }
+
                   res.writeHead(response.status, { 'Content-Type': 'application/json' });
                   res.end(JSON.stringify(data));
                 }
