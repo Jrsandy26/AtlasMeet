@@ -1,6 +1,9 @@
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
+
+dotenv.config();
 import { sendOtpEmail, sendResetEmail, sendInviteEmail, sendMeetingLogEmail } from './smtpService.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -59,9 +62,28 @@ app.post('/api/auth/send-meeting-log', async (req, res) => {
   }
 });
 
+app.get('/api/config', (req, res) => {
+  res.json({
+    hasNvidiaKey: !!process.env.NVIDIA_API_KEY,
+    hasOpenaiKey: !!process.env.OPENAI_API_KEY,
+    hasGroqKey: !!process.env.GROQ_API_KEY,
+    hasGeminiKey: !!process.env.GEMINI_API_KEY
+  });
+});
+
 app.post('/api/nvidia/chat', async (req, res) => {
   try {
-    const apiKey = req.headers['authorization'];
+    let apiKey = req.headers['authorization'];
+    
+    // Fallback to server-side .env key if client key is missing
+    if (!apiKey || apiKey === 'Bearer ' || apiKey === 'Bearer null' || apiKey === 'Bearer undefined' || apiKey === 'Bearer ""') {
+      if (process.env.NVIDIA_API_KEY) {
+        apiKey = `Bearer ${process.env.NVIDIA_API_KEY}`;
+      } else {
+        return res.status(401).json({ success: false, detail: 'NVIDIA NIM API Key not configured on client or server.' });
+      }
+    }
+
     const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -78,15 +100,24 @@ app.post('/api/nvidia/chat', async (req, res) => {
     res.json(data);
   } catch (err) {
     console.error('NVIDIA Chat Proxy Error:', err);
-    res.status(550).json({ success: false, detail: err.message });
+    res.status(500).json({ success: false, detail: err.message });
   }
 });
 
 app.post('/api/nvidia/transcribe', async (req, res) => {
   try {
     const { audioBase64, model } = req.body;
-    const apiKey = req.headers['authorization'];
+    let apiKey = req.headers['authorization'];
     
+    // Fallback to server-side .env key if client key is missing
+    if (!apiKey || apiKey === 'Bearer ' || apiKey === 'Bearer null' || apiKey === 'Bearer undefined' || apiKey === 'Bearer ""') {
+      if (process.env.NVIDIA_API_KEY) {
+        apiKey = `Bearer ${process.env.NVIDIA_API_KEY}`;
+      } else {
+        return res.status(401).json({ success: false, detail: 'NVIDIA NIM API Key not configured on client or server.' });
+      }
+    }
+
     if (!audioBase64) {
       return res.status(400).json({ success: false, detail: 'audioBase64 is required' });
     }

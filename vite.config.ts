@@ -1,7 +1,10 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import dotenv from 'dotenv'
 import { sendOtpEmail, sendResetEmail, sendInviteEmail, sendMeetingLogEmail } from './smtpService.js'
+
+dotenv.config()
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -14,6 +17,17 @@ export default defineConfig({
         server.middlewares.use(async (req, res, next) => {
           const url = req.url || '';
           
+          if (req.method === 'GET' && url.startsWith('/api/config')) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              hasNvidiaKey: !!process.env.NVIDIA_API_KEY,
+              hasOpenaiKey: !!process.env.OPENAI_API_KEY,
+              hasGroqKey: !!process.env.GROQ_API_KEY,
+              hasGeminiKey: !!process.env.GEMINI_API_KEY
+            }));
+            return;
+          }
+
           if (req.method === 'POST' && (url.startsWith('/api/auth/send-otp') || url.startsWith('/api/auth/send-reset-code') || url.startsWith('/api/auth/send-invite') || url.startsWith('/api/auth/send-meeting-log'))) {
             let body = '';
             req.on('data', chunk => {
@@ -55,14 +69,24 @@ export default defineConfig({
             req.on('end', async () => {
               try {
                 const parsed = JSON.parse(body);
-                const apiKey = req.headers['authorization'];
+                let apiKey = req.headers['authorization'];
+
+                if (!apiKey || apiKey === 'Bearer ' || apiKey === 'Bearer null' || apiKey === 'Bearer undefined' || apiKey === 'Bearer ""') {
+                  if (process.env.NVIDIA_API_KEY) {
+                    apiKey = `Bearer ${process.env.NVIDIA_API_KEY}`;
+                  } else {
+                    res.writeHead(401, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, detail: 'NVIDIA NIM API Key not configured on client or server.' }));
+                    return;
+                  }
+                }
 
                 if (url.startsWith('/api/nvidia/chat')) {
                   const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
                     method: 'POST',
                     headers: {
                       'Content-Type': 'application/json',
-                      'Authorization': apiKey as string
+                      'Authorization': apiKey
                     },
                     body: JSON.stringify(parsed)
                   });
@@ -80,7 +104,7 @@ export default defineConfig({
                   const response = await fetch('https://integrate.api.nvidia.com/v1/audio/transcriptions', {
                     method: 'POST',
                     headers: {
-                      'Authorization': apiKey as string
+                      'Authorization': apiKey
                     },
                     body: formData
                   });

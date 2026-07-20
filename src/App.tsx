@@ -114,6 +114,7 @@ export default function App() {
   const [viewState, setViewState] = useState<'homepage' | 'app' | 'documentation' | 'api' | 'support'>('homepage');
   const [showPostMeetingModal, setShowPostMeetingModal] = useState<string | null>(null);
   const [emailSendingState, setEmailSendingState] = useState<{ [meetingId: string]: 'idle' | 'sending' | 'sent' | 'error' }>({});
+  const [serverConfig, setServerConfig] = useState<{ hasNvidiaKey: boolean; hasOpenaiKey: boolean; hasGroqKey: boolean; hasGeminiKey: boolean } | null>(null);
   const [sendingLog, setSendingLog] = useState(false);
   const [logSent, setLogSent] = useState(false);
   const [showConfirmEmail, setShowConfirmEmail] = useState(false);
@@ -319,6 +320,12 @@ export default function App() {
     setGeminiModel(localStorage.getItem('geminiModel') || 'gemini-1.5-flash');
     setNvidiaModel(localStorage.getItem('nvidiaModel') || 'meta/llama-3.1-405b-instruct');
     setUserName(localStorage.getItem('userName') || 'Meeting Organizer');
+
+    // Query server for pre-configured keys in .env
+    fetch('/api/config')
+      .then(res => res.json())
+      .then(data => setServerConfig(data))
+      .catch(err => console.error('Failed to retrieve server api configs:', err));
   }, []);
 
   // Update Settings in LocalStorage
@@ -344,9 +351,9 @@ export default function App() {
     e.target.value = '';
 
     // Check cloud / local configs
-    const isGroqEnabled = transcribeProvider === 'groq' && groqKey;
-    const isOpenAIEnabled = transcribeProvider === 'openai' && openaiKey;
-    const isNvidiaEnabled = transcribeProvider === 'nvidia' && nvidiaKey;
+    const isGroqEnabled = transcribeProvider === 'groq' && (groqKey || serverConfig?.hasGroqKey);
+    const isOpenAIEnabled = transcribeProvider === 'openai' && (openaiKey || serverConfig?.hasOpenaiKey);
+    const isNvidiaEnabled = transcribeProvider === 'nvidia' && (nvidiaKey || serverConfig?.hasNvidiaKey);
     const isCustomEnabled = transcribeProvider === 'custom' && transcribeCustomEndpoint;
     
     let activeProvider = transcribeProvider;
@@ -356,25 +363,25 @@ export default function App() {
     if (isCustomEnabled) {
       // Custom local server needs no API keys
     } else if (isNvidiaEnabled) {
-      activeKey = nvidiaKey;
+      activeKey = nvidiaKey || 'server_key';
       activeModelName = 'nvidia/whisper-large-v3';
     } else if (isGroqEnabled) {
-      activeKey = groqKey;
+      activeKey = groqKey || 'server_key';
       activeModelName = groqModel;
     } else if (isOpenAIEnabled) {
-      activeKey = openaiKey;
+      activeKey = openaiKey || 'server_key';
       activeModelName = 'whisper-1';
-    } else if (nvidiaKey) {
+    } else if (nvidiaKey || serverConfig?.hasNvidiaKey) {
       activeProvider = 'nvidia';
-      activeKey = nvidiaKey;
+      activeKey = nvidiaKey || 'server_key';
       activeModelName = 'nvidia/whisper-large-v3';
-    } else if (groqKey) {
+    } else if (groqKey || serverConfig?.hasGroqKey) {
       activeProvider = 'groq';
-      activeKey = groqKey;
+      activeKey = groqKey || 'server_key';
       activeModelName = groqModel;
-    } else if (openaiKey) {
+    } else if (openaiKey || serverConfig?.hasOpenaiKey) {
       activeProvider = 'openai';
-      activeKey = openaiKey;
+      activeKey = openaiKey || 'server_key';
       activeModelName = 'whisper-1';
     }
 
@@ -533,10 +540,10 @@ export default function App() {
     setIsTranslating(true);
     try {
       const hasKey = summaryProvider === 'ollama' || 
-                    (summaryProvider === 'gemini' && geminiKey) || 
-                    (summaryProvider === 'openai' && openaiKey) || 
-                    (summaryProvider === 'nvidia' && nvidiaKey) || 
-                    (summaryProvider === 'groq' && groqKey);
+                    (summaryProvider === 'gemini' && (geminiKey || serverConfig?.hasGeminiKey)) || 
+                    (summaryProvider === 'openai' && (openaiKey || serverConfig?.hasOpenaiKey)) || 
+                    (summaryProvider === 'nvidia' && (nvidiaKey || serverConfig?.hasNvidiaKey)) || 
+                    (summaryProvider === 'groq' && (groqKey || serverConfig?.hasGroqKey));
 
       let responseText = '';
       if (hasKey) {
@@ -546,7 +553,7 @@ export default function App() {
 
         const config: LLMConfig = {
           provider: summaryProvider,
-          apiKey: summaryProvider === 'gemini' ? geminiKey : summaryProvider === 'openai' ? openaiKey : summaryProvider === 'nvidia' ? nvidiaKey : groqKey,
+          apiKey: summaryProvider === 'gemini' ? (geminiKey || 'server') : summaryProvider === 'openai' ? (openaiKey || 'server') : summaryProvider === 'nvidia' ? (nvidiaKey || 'server') : (groqKey || 'server'),
           model: summaryProvider === 'ollama' ? ollamaModel : summaryProvider === 'gemini' ? geminiModel : summaryProvider === 'openai' ? openaiModel : summaryProvider === 'nvidia' ? nvidiaModel : groqModel,
           customEndpoint: summaryProvider === 'ollama' ? ollamaEndpoint : undefined,
         };
@@ -1105,13 +1112,13 @@ export default function App() {
         if (transcribeProvider === 'custom' && transcribeCustomEndpoint) {
           const cloudText = await transcriptionService.transcribeWithCustomLocal(blob, transcribeCustomEndpoint);
           await processCloudTranscript(activeMeetingId, cloudText);
-        } else if (transcribeProvider === 'nvidia' && nvidiaKey) {
+        } else if (transcribeProvider === 'nvidia' && (nvidiaKey || serverConfig?.hasNvidiaKey)) {
           const cloudText = await transcriptionService.transcribeWithNvidia(blob, nvidiaKey, 'nvidia/whisper-large-v3');
           await processCloudTranscript(activeMeetingId, cloudText);
-        } else if (transcribeProvider === 'groq' && groqKey) {
+        } else if (transcribeProvider === 'groq' && (groqKey || serverConfig?.hasGroqKey)) {
           const cloudText = await transcriptionService.transcribeWithGroq(blob, groqKey, groqModel);
           await processCloudTranscript(activeMeetingId, cloudText);
-        } else if (transcribeProvider === 'openai' && openaiKey) {
+        } else if (transcribeProvider === 'openai' && (openaiKey || serverConfig?.hasOpenaiKey)) {
           const cloudText = await transcriptionService.transcribeWithOpenAI(blob, openaiKey);
           await processCloudTranscript(activeMeetingId, cloudText);
         }
@@ -1183,7 +1190,7 @@ export default function App() {
 
       const config: LLMConfig = {
         provider: summaryProvider,
-        apiKey: summaryProvider === 'gemini' ? geminiKey : summaryProvider === 'openai' ? openaiKey : summaryProvider === 'nvidia' ? nvidiaKey : groqKey,
+        apiKey: summaryProvider === 'gemini' ? (geminiKey || 'server') : summaryProvider === 'openai' ? (openaiKey || 'server') : summaryProvider === 'nvidia' ? (nvidiaKey || 'server') : (groqKey || 'server'),
         model: summaryProvider === 'ollama' ? ollamaModel : summaryProvider === 'gemini' ? geminiModel : summaryProvider === 'openai' ? openaiModel : summaryProvider === 'nvidia' ? nvidiaModel : groqModel,
         customEndpoint: summaryProvider === 'ollama' ? ollamaEndpoint : undefined,
       };
@@ -2789,7 +2796,7 @@ export default function App() {
                       <label className="block text-xs font-semibold text-slate-500 mb-1">NVIDIA NIM API Key</label>
                       <input
                         type="password"
-                        placeholder="nvapi-..."
+                        placeholder={serverConfig?.hasNvidiaKey ? "Configured on server via .env" : "nvapi-..."}
                         value={nvidiaKey}
                         onChange={(e) => {
                           setNvidiaKey(e.target.value);
