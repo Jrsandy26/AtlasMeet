@@ -2811,15 +2811,41 @@ export default function App() {
                     {summaryProvider === 'nvidia' && (
                       <div>
                         <label className="block text-xs font-semibold text-slate-500 mb-1">NVIDIA NIM Chat Model</label>
-                        <input
-                          type="text"
-                          value={nvidiaModel}
+                        <select
+                          value={['meta/llama-3.3-70b-instruct', 'nvidia/llama-3.1-nemotron-70b-instruct', 'meta/llama-3.1-70b-instruct', 'meta/llama-3.1-8b-instruct'].includes(nvidiaModel) ? nvidiaModel : 'custom'}
                           onChange={(e) => {
-                            setNvidiaModel(e.target.value);
-                            saveSetting('nvidiaModel', e.target.value);
+                            const val = e.target.value;
+                            if (val !== 'custom') {
+                              setNvidiaModel(val);
+                              saveSetting('nvidiaModel', val);
+                            } else {
+                              if (['meta/llama-3.3-70b-instruct', 'nvidia/llama-3.1-nemotron-70b-instruct', 'meta/llama-3.1-70b-instruct', 'meta/llama-3.1-8b-instruct'].includes(nvidiaModel)) {
+                                setNvidiaModel('');
+                                saveSetting('nvidiaModel', '');
+                              }
+                            }
                           }}
-                          className="w-full border border-slate-200 outline-none focus:border-purple-600 rounded-lg p-2 text-xs"
-                        />
+                          className="w-full bg-white border border-slate-200 outline-none focus:border-purple-600 rounded-lg p-2 text-xs mb-2 cursor-pointer"
+                        >
+                          <option value="meta/llama-3.3-70b-instruct">meta/llama-3.3-70b-instruct (Recommended)</option>
+                          <option value="nvidia/llama-3.1-nemotron-70b-instruct">nvidia/llama-3.1-nemotron-70b-instruct</option>
+                          <option value="meta/llama-3.1-70b-instruct">meta/llama-3.1-70b-instruct</option>
+                          <option value="meta/llama-3.1-8b-instruct">meta/llama-3.1-8b-instruct</option>
+                          <option value="custom">Custom Model Name...</option>
+                        </select>
+                        
+                        {(!['meta/llama-3.3-70b-instruct', 'nvidia/llama-3.1-nemotron-70b-instruct', 'meta/llama-3.1-70b-instruct', 'meta/llama-3.1-8b-instruct'].includes(nvidiaModel) || nvidiaModel === '') && (
+                          <input
+                            type="text"
+                            placeholder="Enter custom model ID (e.g. mistralai/mixtral-8x22b-v0.1)"
+                            value={nvidiaModel}
+                            onChange={(e) => {
+                              setNvidiaModel(e.target.value);
+                              saveSetting('nvidiaModel', e.target.value);
+                            }}
+                            className="w-full border border-slate-200 outline-none focus:border-purple-600 rounded-lg p-2 text-xs"
+                          />
+                        )}
                       </div>
                     )}
                   </div>
