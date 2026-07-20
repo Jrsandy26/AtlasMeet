@@ -1134,10 +1134,10 @@ export default function App() {
       // Open export and email logs hub modal!
       setShowPostMeetingModal(activeMeetingId);
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to complete recording processing:', error);
       setRecordingError('server-offline');
-      alert('Recording stopped. Could not contact transcription server.');
+      alert(`Recording stopped: ${error?.message || 'Could not contact transcription server.'}`);
     } finally {
       setIsPostProcessing(false);
       setIsRecording(false);
