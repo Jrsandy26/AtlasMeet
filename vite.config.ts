@@ -90,7 +90,13 @@ export default defineConfig({
                     },
                     body: JSON.stringify(parsed)
                   });
-                  const data = await response.json();
+                  const responseText = await response.text();
+                  let data;
+                  try {
+                    data = JSON.parse(responseText);
+                  } catch (e) {
+                    data = { detail: responseText };
+                  }
                   res.writeHead(response.status, { 'Content-Type': 'application/json' });
                   res.end(JSON.stringify(data));
                 } else if (url.startsWith('/api/nvidia/transcribe')) {
@@ -108,7 +114,13 @@ export default defineConfig({
                     },
                     body: formData
                   });
-                  const data = await response.json();
+                  const responseText = await response.text();
+                  let data;
+                  try {
+                    data = JSON.parse(responseText);
+                  } catch (e) {
+                    data = { detail: responseText };
+                  }
                   res.writeHead(response.status, { 'Content-Type': 'application/json' });
                   res.end(JSON.stringify(data));
                 }

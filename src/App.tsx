@@ -70,7 +70,7 @@ export default function App() {
   const [openaiModel, setOpenaiModel] = useState('gpt-4o-mini');
   const [groqModel, setGroqModel] = useState('llama-3.3-70b-versatile');
   const [geminiModel, setGeminiModel] = useState('gemini-1.5-flash');
-  const [nvidiaModel, setNvidiaModel] = useState('meta/llama-3.1-405b-instruct');
+  const [nvidiaModel, setNvidiaModel] = useState('meta/llama-3.3-70b-instruct');
 
   // Active meeting states
   const [activeMeetingNotes, setActiveMeetingNotes] = useState('');
@@ -318,7 +318,7 @@ export default function App() {
     setOpenaiModel(localStorage.getItem('openaiModel') || 'gpt-4o-mini');
     setGroqModel(localStorage.getItem('groqModel') || 'llama-3.3-70b-versatile');
     setGeminiModel(localStorage.getItem('geminiModel') || 'gemini-1.5-flash');
-    setNvidiaModel(localStorage.getItem('nvidiaModel') || 'meta/llama-3.1-405b-instruct');
+    setNvidiaModel(localStorage.getItem('nvidiaModel') || 'meta/llama-3.3-70b-instruct');
     setUserName(localStorage.getItem('userName') || 'Meeting Organizer');
 
     // Query server for pre-configured keys in .env
@@ -2404,7 +2404,7 @@ export default function App() {
                       <div className="space-y-1">
                         <h3 className="font-bold text-slate-800 text-sm">AI Summary Generator</h3>
                         <p className="text-xs text-slate-400">
-                          Summarize with {summaryProvider.toUpperCase()} / {summaryProvider === 'ollama' ? ollamaModel : summaryProvider === 'gemini' ? geminiModel : summaryProvider === 'openai' ? openaiModel : groqModel}
+                          Summarize with {summaryProvider.toUpperCase()} / {summaryProvider === 'ollama' ? ollamaModel : summaryProvider === 'gemini' ? geminiModel : summaryProvider === 'openai' ? openaiModel : summaryProvider === 'nvidia' ? nvidiaModel : groqModel}
                         </p>
                       </div>
 

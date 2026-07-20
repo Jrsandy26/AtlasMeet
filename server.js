@@ -93,7 +93,14 @@ app.post('/api/nvidia/chat', async (req, res) => {
       body: JSON.stringify(req.body)
     });
 
-    const data = await response.json();
+    const responseText = await response.text();
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch (e) {
+      data = { detail: responseText };
+    }
+
     if (!response.ok) {
       throw new Error(data?.error?.message || data?.detail || `NVIDIA NIM Chat failed: ${response.statusText}`);
     }
@@ -136,7 +143,14 @@ app.post('/api/nvidia/transcribe', async (req, res) => {
       body: formData
     });
 
-    const data = await response.json();
+    const responseText = await response.text();
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch (e) {
+      data = { detail: responseText };
+    }
+
     if (!response.ok) {
       throw new Error(data?.error?.message || data?.detail || `NVIDIA NIM transcription failed: ${response.statusText}`);
     }
