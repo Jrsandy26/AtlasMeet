@@ -11,23 +11,28 @@ AtlasMeet is a modern, enterprise-grade meeting intelligence and transcription p
     *   Role-Based Access Control (RBAC): Admin, Member, and Viewer tiers.
     *   Secure invitation workflow with dynamic join links and company email verification.
 *   **🎙️ Hybrid Speech-to-Text (STT)**:
-    *   *Real-time Streaming*: Powered by the browser Web Speech API (zero latency, zero cost) aligning automatically to selected speaker languages.
-    *   *High-Accuracy Cloud Transcription*: Optional post-processing whisper transcribing using state-of-the-art models via **NVIDIA NIM API**, **Groq Whisper**, or **OpenAI Whisper**.
-*   **🌐 Intelligent AI Translation**:
-    *   *Batched Free Translation*: Leverages the MyMemory translation API using advanced 10-line batching to reduce latency and bypass rate limits by 90%.
-    *   *Enterprise Translation*: Translation using **NVIDIA NIM**, **Gemini**, **OpenAI**, or **Groq** LLMs.
-    *   *Translation Persistence*: Translations write back to IndexedDB so they persist across browser reloads.
+    *   *Real-time Streaming*: Powered by the browser Web Speech API (zero latency, zero cost) aligning automatically to selected speaker languages (e.g. English, Japanese, Urdu, Spanish, French, etc.).
+    *   *High-Accuracy Cloud Transcription*: Post-recording Whisper transcription using state-of-the-art models via **NVIDIA NIM API**, **Groq Whisper**, or **OpenAI Whisper**.
+*   **🌐 Bulletproof Multi-Tier AI Translation**:
+    *   *Tier 1 (Primary)*: Keyless batched translation using the MyMemory API.
+    *   *Tier 2 (Fallback)*: Google Translate Free API (`translate.googleapis.com`) serving as an immediate high-speed backup.
+    *   *Tier 3 (Enterprise Fallback)*: Full-context translation using **OpenRouter**, **NVIDIA NIM**, **Gemini**, **OpenAI**, or **Groq** LLMs.
+    *   *Stop-Recording Sync*: Automatically translates post-processed Cloud Whisper transcriptions if Live Translate was enabled, showing the bilingual translation immediately.
 *   **📧 Automated Email Dispatch & File Exports**:
     *   Export summaries, notes, and transcripts locally as **TXT**, **PDF**, or **DOCX** (Word-compatible HTML).
     *   "Send to Mail" triggers automated SMTP dispatches sending full meeting summary logs directly to user inboxes with:
         1.  `_audio.webm` (Raw voice recording file)
         2.  `_transcript.txt` (Text transcript segments)
         3.  `_minutes.docx` (Rich-text formatted Word summary minutes)
-*   **🔒 Security & Session Persistence**:
-    *   Automatic **6-hour session token persistence** bypassing 2-step OTP verification for active daily users.
-    *   Cross-Origin Resource Sharing (CORS) resolution using specialized backend proxy routing for NVIDIA NIM and cloud APIs.
-*   **⚡ Production Scaling & Load Balancing**:
-    *   Node/Express backend serving client-side assets and routing proxy requests.
+*   **🔒 Corporate Security & Session Control**:
+    *   **6-Hour Session Expiry**: Active session duration limit.
+    *   **Single Session Enforcement**: Restricts a user to one active login. Logging in elsewhere terminates old session tokens.
+    *   **30-Minute Inactivity Timeout**: Automatically logs users out after 30 minutes of keyboard, mouse, or scroll inactivity.
+    *   **Brute-Force Lockout**: Enforces a 15-minute account lock after 5 failed login attempts.
+    *   **Email OTP Throttle**: Restricts OTP dispatches to a maximum of 3 requests within 10 minutes.
+*   **⚡ Serverless & Server-Side Proxies**:
+    *   Secure proxy routes `/api/groq/*`, `/api/nvidia/*`, and `/api/openrouter/*` wrap and inject server-side `.env` keys so they are never exposed to the client browser.
+    *   **Vercel Serverless Function** entry points mapped inside `/api` for rapid cloud deployment.
     *   **Nginx Load Balancer Upstream configuration** ready to distribute connections across multiple backend ports (e.g. 3000, 3001) for 30-50 simultaneous enterprise users.
 
 ---
@@ -35,9 +40,9 @@ AtlasMeet is a modern, enterprise-grade meeting intelligence and transcription p
 ## 🛠️ Tech Stack
 
 *   **Frontend**: React (v19), Vite, TailwindCSS, Framer Motion, Lucide icons, Dexie.js (IndexedDB).
-*   **Backend**: Node.js, Express, Nodemailer.
-*   **APIs Supported**: NVIDIA NIM, Groq, OpenAI, Google Gemini, Ollama.
-*   **Database**: IndexedDB (User-specific namespace isolated databases).
+*   **Backend**: Node.js, Express, Nodemailer, Vercel Serverless Functions.
+*   **APIs Supported**: OpenRouter, Groq, OpenAI, Google Gemini, NVIDIA NIM, Ollama.
+*   **Database**: Supabase (Security logging & Session Tokens), IndexedDB (Local user database namespaces).
 *   **Server**: Nginx (configured for upstream load balancing).
 
 ---
@@ -67,12 +72,25 @@ Create a `.env` file in the root directory and add your credentials:
 # Server Port Configuration
 PORT=3000
 
+# Supabase Configurations
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+SUPABASE_SECRET_KEY=sb_secret_...
+SUPABASE_JWKS_URL=https://your-project.supabase.co/auth/v1/.well-known/jwks.json
+
 # SMTP Mail Server Credentials (used for OTP, Invites, and Summary Logs)
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=465
 SMTP_SECURE=true
 SMTP_EMAIL=your-company-email@gmail.com
 SMTP_PASSWORD=your-gmail-app-password
+
+# LLM API Keys (Optional - secure proxy handlers inject these on demand)
+GROQ_API_KEY=gsk_...
+OPENROUTER_API_KEY=sk-or-...
+NVIDIA_API_KEY=nvapi-...
+OPENAI_API_KEY=sk-proj-...
+GEMINI_API_KEY=AIzaSy...
 ```
 
 ### 3. Running the Application
@@ -93,25 +111,22 @@ The server will bind to the configured `PORT` and run at [http://localhost:3000]
 
 ---
 
-## ⚖️ Production Scaling & Load Balancing
+## ☁️ Deployment
 
-For deploying in environments supporting 30-50 concurrent active users, run multiple Node server instances (e.g., on ports 3000 and 3001) behind the included **Nginx Load Balancer configuration** (`nginx.conf`).
-
-The load balancer handles proxying traffic and API endpoints smoothly:
-
-```nginx
-upstream express_mail_backend {
-    server 127.0.0.1:3000 max_fails=3 fail_timeout=10s;
-    server 127.0.0.1:3001 max_fails=3 fail_timeout=10s;
-}
-```
+### Vercel Deployment
+This application is fully optimized for serverless deployment on **Vercel**:
+1. Install the Vercel CLI: `npm install -g vercel`
+2. Run `vercel` in the project root.
+3. Configure your Environment Variables in the Vercel Project Dashboard.
 
 ---
 
 ## 📂 Project Structure
 
 ```
+├── api/                   # Vercel Serverless Function entry points (Proxies & config)
 ├── dist/                  # Compiled React production bundle
+├── netlify/               # Netlify configuration and serverless functions
 ├── src/
 │   ├── components/        # UI components (Workspace selectors, Settings panels)
 │   ├── services/          # Client-side API handlers
@@ -120,6 +135,7 @@ upstream express_mail_backend {
 │   ├── App.tsx            # Main application logic
 │   ├── db.ts              # Dexie IndexedDB schemas & namespace swapper
 │   └── main.tsx           # React mounting point
+├── vercel.json            # Vercel deployment routes mapping
 ├── server.js              # Express production entry point & API proxies
 ├── smtpService.ts         # Nodemailer email SMTP triggers (transpiled to .js on build)
 ├── nginx.conf             # Production Nginx upstream load balancer config
@@ -132,3 +148,4 @@ upstream express_mail_backend {
 ## 📄 License
 
 This project is proprietary and confidential. Built for corporate meeting intelligence operations.
+Corporate Security Operations Center (SOC) • Hosur, India.

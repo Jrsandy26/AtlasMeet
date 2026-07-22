@@ -3,7 +3,7 @@ import type { FormEvent } from 'react';
 import { Lock, User, Sparkles, AlertCircle, Key, Mail, ShieldAlert, Users, ArrowRight, Check } from 'lucide-react';
 
 interface LoginScreenProps {
-  onLoginSuccess: (token: string, user: { username: string; role: string; orgId?: string }) => void;
+  onLoginSuccess: (token: string, user: { username: string; role: string; orgId?: string; session_token?: string }) => void;
 }
 
 export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
@@ -22,12 +22,12 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       sessionStorage.removeItem('org_invite_code');
     }
   }, []);
-  
+
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  
+
   // Organization States
   const [orgName, setOrgName] = useState('');
   const [orgDesc, setOrgDesc] = useState('');
@@ -57,12 +57,49 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     orgInvite?: string;
   } | null>(null);
 
+  const logLoginAttempt = async (uname: string, status: 'success' | 'failed', details: string) => {
+    try {
+      await fetch('/api/auth/login-logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: `login-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          username: uname,
+          status,
+          details,
+          timestamp: new Date().toISOString()
+        })
+      });
+    } catch (e) {
+      console.error('Failed to log login attempt to Supabase:', e);
+    }
+  };
+
+  const logMailSend = async (recipient: string, type: string, status: 'success' | 'failed', details?: string) => {
+    try {
+      await fetch('/api/auth/mail-logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: `mail-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          recipient,
+          type,
+          status,
+          details: details || '',
+          timestamp: new Date().toISOString()
+        })
+      });
+    } catch (e) {
+      console.error('Failed to log mail send to Supabase:', e);
+    }
+  };
+
   const generateRecoveryCode = () => {
     const segment = () => Math.random().toString(36).substring(2, 6).toUpperCase();
     return `ATLAS-${segment()}-${segment()}-${segment()}`;
   };
 
-  const handleVerifyOtp = (e: FormEvent) => {
+  const handleVerifyOtp = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
 
@@ -72,17 +109,40 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     }
 
     if (enteredOtp.trim() !== generatedOtp) {
+      await logLoginAttempt(tempUser?.username || username || 'unknown', 'failed', 'Invalid 2FA OTP code.');
       setError('Invalid 2FA code. Please check your inbox.');
       return;
     }
 
     if (tempUser) {
-      const mockToken = `mock-jwt-${tempUser.id}-${Date.now()}`;
-      onLoginSuccess(mockToken, { 
-        username: tempUser.username, 
-        role: tempUser.role,
-        orgId: tempUser.orgId
-      });
+      const sessionToken = `session-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+
+      try {
+        const updatedUser = {
+          ...tempUser,
+          org_id: tempUser.orgId,
+          session_token: sessionToken
+        };
+        delete (updatedUser as any).orgId;
+
+        const saveRes = await fetch('/api/auth/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updatedUser)
+        });
+        if (!saveRes.ok) throw new Error('Failed to update session token in database.');
+
+        await logLoginAttempt(tempUser.username, 'success', 'Logged in successfully after 2FA OTP verification.');
+        const mockToken = `mock-jwt-${tempUser.id}-${Date.now()}`;
+        onLoginSuccess(mockToken, {
+          username: tempUser.username,
+          role: tempUser.role,
+          orgId: tempUser.orgId,
+          session_token: sessionToken
+        });
+      } catch (err: any) {
+        setError(err.message || 'Login failed during session registration.');
+      }
     }
   };
 
@@ -91,17 +151,32 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     setError('');
     setLoading(true);
     try {
+      // Check OTP limit (3 / 10 minutes)
+      const mailsRes = await fetch('/api/auth/mail-logs');
+      const mailLogs = mailsRes.ok ? await mailsRes.json() : [];
+      const recentOtps = mailLogs.filter((log: any) =>
+        log.recipient.toLowerCase() === tempUser.email?.toLowerCase() &&
+        log.type.includes('OTP') &&
+        (Date.now() - new Date(log.timestamp).getTime()) < 10 * 60 * 1000
+      );
+
+      if (recentOtps.length >= 3) {
+        throw new Error('OTP request limit exceeded. You can request up to 3 verification codes every 10 minutes.');
+      }
+
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       const emailRes = await fetch('/api/auth/send-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: tempUser.email, otp })
       });
-      
+
       if (!emailRes.ok) {
+        await logMailSend(tempUser.email, '2FA OTP Resend', 'failed', 'Failed to dispatch resend email api');
         throw new Error('Failed to dispatch resend email.');
       }
-      
+
+      await logMailSend(tempUser.email, '2FA OTP Resend', 'success', `OTP: ${otp}`);
       setGeneratedOtp(otp);
       setError(`New code sent to ${tempUser.email}!`);
     } catch (err: any) {
@@ -126,42 +201,59 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         return;
       }
       setLoading(true);
-      setTimeout(() => {
-        try {
-          const usersStr = localStorage.getItem('atlasmeet_users') || '[]';
-          const users = JSON.parse(usersStr);
-
-          // Find user by username or email
-          const userIdx = users.findIndex((u: any) => 
-            u.username.toLowerCase() === username.toLowerCase().trim() || 
-            u.email.toLowerCase() === username.toLowerCase().trim()
-          );
-
-          if (userIdx === -1) {
-            throw new Error('No account found matching that username or email.');
-          }
-
-          const user = users[userIdx];
-          if (!user.recovery_code || user.recovery_code.toLowerCase().trim() !== recoveryInput.toLowerCase().trim()) {
-            throw new Error('Invalid recovery code.');
-          }
-
-          // Upgraded password directly without admin approval
-          users[userIdx].password = newPassword;
-          localStorage.setItem('atlasmeet_users', JSON.stringify(users));
-
-          setViewMode('login');
-          setUsername('');
-          setRecoveryInput('');
-          setNewPassword('');
-          setConfirmNewPassword('');
-          setError('Password reset successfully! Please login.');
-        } catch (err: any) {
-          setError(err.message || 'Reset failed.');
-        } finally {
-          setLoading(false);
+      try {
+        const res = await fetch('/api/auth/users');
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || 'Failed to retrieve user database.');
         }
-      }, 500);
+        const usersRaw = await res.json();
+        const users = usersRaw.map((u: any) => ({
+          ...u,
+          orgId: u.org_id
+        }));
+
+        // Find user by username or email
+        const userIdx = users.findIndex((u: any) =>
+          u.username.toLowerCase() === username.toLowerCase().trim() ||
+          u.email.toLowerCase() === username.toLowerCase().trim()
+        );
+
+        if (userIdx === -1) {
+          throw new Error('No account found matching that username or email.');
+        }
+
+        const user = users[userIdx];
+        if (!user.recovery_code || user.recovery_code.toLowerCase().trim() !== recoveryInput.toLowerCase().trim()) {
+          throw new Error('Invalid recovery code.');
+        }
+
+        // Upgraded password directly without admin approval in Supabase
+        const updatedUser = {
+          ...user,
+          password: newPassword,
+          org_id: user.orgId // Map back to DB schema format
+        };
+        delete (updatedUser as any).orgId;
+
+        const saveRes = await fetch('/api/auth/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updatedUser)
+        });
+        if (!saveRes.ok) throw new Error('Failed to write password updates to database.');
+
+        setViewMode('login');
+        setUsername('');
+        setRecoveryInput('');
+        setNewPassword('');
+        setConfirmNewPassword('');
+        setError('Password reset successfully! Please login.');
+      } catch (err: any) {
+        setError(err.message || 'Reset failed.');
+      } finally {
+        setLoading(false);
+      }
       return;
     }
 
@@ -204,168 +296,217 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
 
     setLoading(true);
 
-    setTimeout(async () => {
-      try {
-        const usersStr = localStorage.getItem('atlasmeet_users') || '[]';
-        const users = JSON.parse(usersStr);
+    try {
+      const res = await fetch('/api/auth/users');
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to retrieve user database.');
+      }
+      const usersRaw = await res.json();
+      const users = usersRaw.map((u: any) => ({
+        ...u,
+        orgId: u.org_id
+      }));
 
-        if (viewMode === 'login') {
-          // Login Path
-          // Check username OR email
-          const user = users.find((u: any) => 
-            (u.username.toLowerCase() === username.toLowerCase().trim() || 
-             u.email.toLowerCase() === username.toLowerCase().trim()) && 
-            u.password === password
+      if (viewMode === 'login') {
+        // Login Path
+        // Check lockout (5 failures / 15 minutes)
+        const logsRes = await fetch('/api/auth/login-logs');
+        const loginLogs = logsRes.ok ? await logsRes.json() : [];
+        const recentFailures = loginLogs.filter((log: any) =>
+          log.username.toLowerCase() === username.toLowerCase().trim() &&
+          log.status === 'failed' &&
+          (Date.now() - new Date(log.timestamp).getTime()) < 15 * 60 * 1000
+        );
+
+        if (recentFailures.length >= 5) {
+          throw new Error('Account locked due to 5 failed login attempts. Please try again in 15 minutes.');
+        }
+
+        // Check username OR email
+        const user = users.find((u: any) =>
+          (u.username.toLowerCase() === username.toLowerCase().trim() ||
+            u.email.toLowerCase() === username.toLowerCase().trim()) &&
+          u.password === password
+        );
+
+        if (!user) {
+          await logLoginAttempt(username, 'failed', 'Invalid username, email, or password.');
+          throw new Error('Invalid username, email, or password.');
+        }
+
+        // If logging into organization scope, check org ID linkage
+        if (authScope === 'organization') {
+          const orgsStr = localStorage.getItem('atlasmeet_organizations') || '[]';
+          const orgs = JSON.parse(orgsStr);
+          const matchedOrg = orgs.find((o: any) =>
+            o.org_code.toLowerCase() === orgCodeInput.toLowerCase().trim() ||
+            o.id.toLowerCase() === orgCodeInput.toLowerCase().trim()
           );
 
-          if (!user) {
-            throw new Error('Invalid username, email, or password.');
+          if (!matchedOrg) {
+            await logLoginAttempt(user.username, 'failed', `Organization not found: ${orgCodeInput}`);
+            throw new Error('Organization not found.');
           }
 
-          // If logging into organization scope, check org ID linkage
-          if (authScope === 'organization') {
-            const orgsStr = localStorage.getItem('atlasmeet_organizations') || '[]';
-            const orgs = JSON.parse(orgsStr);
-            const matchedOrg = orgs.find((o: any) => 
-              o.org_code.toLowerCase() === orgCodeInput.toLowerCase().trim() || 
-              o.id.toLowerCase() === orgCodeInput.toLowerCase().trim()
-            );
-
-            if (!matchedOrg) {
-              throw new Error('Organization not found.');
-            }
-
-            if (user.orgId !== matchedOrg.id) {
-              throw new Error('This user account is not linked to this organization.');
-            }
-          } else {
-            // Personal workspace login shouldn't be locked into organization hub
-            if (user.orgId) {
-              // Set authScope to organization automatically so they enter org workspace
-              setAuthScope('organization');
-              setOrgCodeInput(user.orgId);
-            }
+          if (user.orgId !== matchedOrg.id) {
+            await logLoginAttempt(user.username, 'failed', `User not linked to organization: ${orgCodeInput}`);
+            throw new Error('This user account is not linked to this organization.');
           }
-
-          if (!user.email) {
-            throw new Error('No registered email found for this account.');
-          }
-
-          // Generate OTP
-          const otp = Math.floor(100000 + Math.random() * 900000).toString();
-          
-          // Send email
-          const emailRes = await fetch('/api/auth/send-otp', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: user.email, otp })
-          });
-
-          if (!emailRes.ok) {
-            const errData = await emailRes.json().catch(() => ({}));
-            throw new Error(errData.detail || '2FA Email delivery failed. Is SMTP active?');
-          }
-
-          setGeneratedOtp(otp);
-          setTempUser(user);
-          setOtpSent(true);
-          setError(`2FA Code successfully sent to ${user.email}!`);
         } else {
-          // Registration Path
-          const exists = users.some((u: any) => u.username.toLowerCase() === username.toLowerCase().trim());
-          if (exists) {
-            throw new Error('Username already registered');
-          }
-
-          const recoveryCode = generateRecoveryCode();
-
-          if (authScope === 'personal') {
-            const newUser = {
-              id: `user-${Date.now()}`,
-              username,
-              email,
-              password,
-              role: users.length === 0 ? 'admin' : 'user', // first user is global admin
-              recovery_code: recoveryCode,
-              created_at: new Date().toISOString()
-            };
-
-            users.push(newUser);
-            localStorage.setItem('atlasmeet_users', JSON.stringify(users));
-
-            setShowSuccessDetails({
-              accountCode: recoveryCode
-            });
-          } else {
-            // Organization Hub Register
-            const orgsStr = localStorage.getItem('atlasmeet_organizations') || '[]';
-            const orgs = JSON.parse(orgsStr);
-
-            let targetOrgId = '';
-            let targetOrgName = '';
-            let targetOrgCode = '';
-            let targetInviteCode = '';
-            let userRole = 'user';
-
-            if (orgAction === 'create') {
-              const cleanOrgName = orgName.trim();
-              const prefix = cleanOrgName.substring(0, 3).toUpperCase().replace(/[^A-Z]/g, 'ORG');
-              targetOrgId = `org-${Date.now()}`;
-              targetOrgName = cleanOrgName;
-              targetOrgCode = `${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
-              targetInviteCode = `${prefix}-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-              userRole = 'admin'; // Creator is org admin
-
-              orgs.push({
-                id: targetOrgId,
-                name: targetOrgName,
-                description: orgDesc,
-                org_code: targetOrgCode,
-                invite_code: targetInviteCode,
-                created_at: new Date().toISOString()
-              });
-              localStorage.setItem('atlasmeet_organizations', JSON.stringify(orgs));
-            } else {
-              // Joining
-              const cleanInvite = orgInviteInput.trim();
-              const matchedOrg = orgs.find((o: any) => o.invite_code.toLowerCase() === cleanInvite.toLowerCase());
-              if (!matchedOrg) {
-                throw new Error('Invalid organization invite code.');
-              }
-              targetOrgId = matchedOrg.id;
-              targetOrgName = matchedOrg.name;
-              targetOrgCode = matchedOrg.org_code;
-              userRole = 'user'; // Joiner is org member
-            }
-
-            const newUser = {
-              id: `user-${Date.now()}`,
-              username,
-              email: email.trim() || `${username}@local-org.com`, // fallback if no email is supplied
-              password,
-              role: userRole,
-              orgId: targetOrgId,
-              recovery_code: recoveryCode,
-              created_at: new Date().toISOString()
-            };
-
-            users.push(newUser);
-            localStorage.setItem('atlasmeet_users', JSON.stringify(users));
-
-            setShowSuccessDetails({
-              accountCode: recoveryCode,
-              orgName: targetOrgName,
-              orgCode: targetOrgCode,
-              orgInvite: targetInviteCode
-            });
+          // Personal workspace login shouldn't be locked into organization hub
+          if (user.orgId) {
+            // Set authScope to organization automatically so they enter org workspace
+            setAuthScope('organization');
+            setOrgCodeInput(user.orgId);
           }
         }
-      } catch (err: any) {
-        setError(err.message || 'Authentication failed');
-      } finally {
-        setLoading(false);
+
+        if (!user.email) {
+          await logLoginAttempt(user.username, 'failed', 'No registered email found for this account.');
+          throw new Error('No registered email found for this account.');
+        }
+
+        // Check OTP request limit (3 / 10 minutes)
+        const mailsRes = await fetch('/api/auth/mail-logs');
+        const mailLogs = mailsRes.ok ? await mailsRes.json() : [];
+        const recentOtps = mailLogs.filter((log: any) =>
+          log.recipient.toLowerCase() === user.email.toLowerCase() &&
+          log.type.includes('OTP') &&
+          (Date.now() - new Date(log.timestamp).getTime()) < 10 * 60 * 1000
+        );
+
+        if (recentOtps.length >= 3) {
+          throw new Error('OTP request limit exceeded. You can request up to 3 verification codes every 10 minutes.');
+        }
+
+        // Generate OTP
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+        // Send email
+        const emailRes = await fetch('/api/auth/send-otp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: user.email, otp })
+        });
+
+        if (!emailRes.ok) {
+          const errData = await emailRes.json().catch(() => ({}));
+          await logMailSend(user.email, '2FA OTP', 'failed', errData.detail || 'Email delivery failed');
+          await logLoginAttempt(user.username, 'failed', `2FA OTP Email dispatch failed: ${errData.detail || 'Email delivery failed'}`);
+          throw new Error(errData.detail || '2FA Email delivery failed. Is SMTP active?');
+        }
+
+        await logMailSend(user.email, '2FA OTP', 'success', `OTP: ${otp}`);
+        await logLoginAttempt(user.username, 'failed', 'Credentials accepted. 2FA OTP verification pending.');
+
+        setGeneratedOtp(otp);
+        setTempUser(user);
+        setOtpSent(true);
+        setError(`2FA Code successfully sent to ${user.email}!`);
+      } else {
+        // Registration Path
+        const exists = users.some((u: any) => u.username.toLowerCase() === username.toLowerCase().trim());
+        if (exists) {
+          throw new Error('Username already registered');
+        }
+
+        const recoveryCode = generateRecoveryCode();
+
+        if (authScope === 'personal') {
+          const newUser = {
+            id: `user-${Date.now()}`,
+            username,
+            email,
+            password,
+            role: users.length === 0 ? 'admin' : 'user', // first user is global admin
+            recovery_code: recoveryCode,
+            created_at: new Date().toISOString()
+          };
+
+          const saveRes = await fetch('/api/auth/users', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(newUser)
+          });
+          if (!saveRes.ok) throw new Error('Registration failed to write to database.');
+
+          setShowSuccessDetails({
+            accountCode: recoveryCode
+          });
+        } else {
+          // Organization Hub Register
+          const orgsStr = localStorage.getItem('atlasmeet_organizations') || '[]';
+          const orgs = JSON.parse(orgsStr);
+
+          let targetOrgId = '';
+          let targetOrgName = '';
+          let targetOrgCode = '';
+          let targetInviteCode = '';
+          let userRole = 'user';
+
+          if (orgAction === 'create') {
+            const cleanOrgName = orgName.trim();
+            const prefix = cleanOrgName.substring(0, 3).toUpperCase().replace(/[^A-Z]/g, 'ORG');
+            targetOrgId = `org-${Date.now()}`;
+            targetOrgName = cleanOrgName;
+            targetOrgCode = `${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
+            targetInviteCode = `${prefix}-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+            userRole = 'admin'; // Creator is org admin
+
+            orgs.push({
+              id: targetOrgId,
+              name: targetOrgName,
+              description: orgDesc,
+              org_code: targetOrgCode,
+              invite_code: targetInviteCode,
+              created_at: new Date().toISOString()
+            });
+            localStorage.setItem('atlasmeet_organizations', JSON.stringify(orgs));
+          } else {
+            // Joining
+            const cleanInvite = orgInviteInput.trim();
+            const matchedOrg = orgs.find((o: any) => o.invite_code.toLowerCase() === cleanInvite.toLowerCase());
+            if (!matchedOrg) {
+              throw new Error('Invalid organization invite code.');
+            }
+            targetOrgId = matchedOrg.id;
+            targetOrgName = matchedOrg.name;
+            targetOrgCode = matchedOrg.org_code;
+            userRole = 'user'; // Joiner is org member
+          }
+
+          const newUser = {
+            id: `user-${Date.now()}`,
+            username,
+            email: email.trim() || `${username}@local-org.com`, // fallback if no email is supplied
+            password,
+            role: userRole,
+            org_id: targetOrgId,
+            recovery_code: recoveryCode,
+            created_at: new Date().toISOString()
+          };
+
+          const saveRes = await fetch('/api/auth/users', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(newUser)
+          });
+          if (!saveRes.ok) throw new Error('Organization registration failed to write to database.');
+
+          setShowSuccessDetails({
+            accountCode: recoveryCode,
+            orgName: targetOrgName,
+            orgCode: targetOrgCode,
+            orgInvite: targetInviteCode
+          });
+        }
       }
-    }, 400);
+    } catch (err: any) {
+      setError(err.message || 'Authentication failed');
+    } finally {
+      setLoading(false);
+    }
   };
 
   // 1. Success Details / Recovery Code Screen
@@ -374,7 +515,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       <div className="fixed inset-0 bg-slate-950 flex items-center justify-center p-4 overflow-y-auto z-50 animate-fadeIn">
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-purple-600/10 rounded-full blur-[100px] pointer-events-none"></div>
         <div className="w-full max-w-md bg-slate-900/80 border border-slate-800/80 backdrop-blur-xl p-8 rounded-3xl shadow-2xl relative space-y-6 text-center">
-          
+
           <div className="w-14 h-14 bg-emerald-600/10 border border-emerald-500/20 rounded-full flex items-center justify-center text-emerald-400 mx-auto shadow-lg shadow-emerald-500/10">
             <Check size={24} />
           </div>
@@ -437,7 +578,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       <div className="fixed inset-0 bg-slate-950 flex items-center justify-center p-4 overflow-y-auto z-50 animate-fadeIn">
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-purple-600/10 rounded-full blur-[100px] pointer-events-none animate-pulse"></div>
         <div className="w-full max-w-md bg-slate-900/80 border border-slate-800/80 backdrop-blur-xl p-8 rounded-3xl shadow-2xl relative">
-          
+
           <div className="flex flex-col items-center mb-8">
             <div className="w-14 h-14 bg-gradient-to-tr from-purple-600 to-indigo-600 rounded-2xl flex items-center justify-center shadow-[0_0_30px_rgba(124,58,237,0.4)] mb-4">
               <ShieldAlert className="text-white" size={24} />
@@ -451,8 +592,8 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
 
           {error && (
             <div className={`p-3.5 mb-6 rounded-xl border flex items-start space-x-3 text-xs leading-normal animate-shake ${error.includes('successful') || error.includes('sent')
-                ? 'bg-emerald-950/40 border-emerald-900/60 text-emerald-400'
-                : 'bg-red-950/40 border-red-900/60 text-red-400'
+              ? 'bg-emerald-950/40 border-emerald-900/60 text-emerald-400'
+              : 'bg-red-950/40 border-red-900/60 text-red-400'
               }`}>
               <AlertCircle size={16} className="shrink-0 mt-0.5" />
               <span>{error}</span>
@@ -529,7 +670,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-indigo-600/10 rounded-full blur-[100px] pointer-events-none animate-pulse delay-1000"></div>
 
       <div className="w-full max-w-md bg-slate-900/80 border border-slate-800/80 backdrop-blur-xl p-8 rounded-3xl shadow-2xl relative">
-        
+
         {/* Brand Header */}
         <div className="flex flex-col items-center mb-6">
           <div className="w-14 h-14 bg-gradient-to-tr from-purple-600 to-indigo-600 rounded-2xl flex items-center justify-center shadow-[0_0_30px_rgba(124,58,237,0.4)] mb-4">
@@ -554,11 +695,10 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 setAuthScope('personal');
                 setError('');
               }}
-              className={`flex-1 py-2 text-center rounded-xl text-xs font-bold transition-all ${
-                authScope === 'personal'
+              className={`flex-1 py-2 text-center rounded-xl text-xs font-bold transition-all ${authScope === 'personal'
                   ? 'bg-purple-650 text-white shadow-md'
                   : 'text-slate-500 hover:text-slate-350'
-              }`}
+                }`}
             >
               Personal Workspace
             </button>
@@ -568,11 +708,10 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 setAuthScope('organization');
                 setError('');
               }}
-              className={`flex-1 py-2 text-center rounded-xl text-xs font-bold transition-all ${
-                authScope === 'organization'
+              className={`flex-1 py-2 text-center rounded-xl text-xs font-bold transition-all ${authScope === 'organization'
                   ? 'bg-purple-650 text-white shadow-md'
                   : 'text-slate-500 hover:text-slate-350'
-              }`}
+                }`}
             >
               Organization Hub
             </button>
@@ -582,8 +721,8 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         {/* Error/Notice Banner */}
         {error && (
           <div className={`p-3.5 mb-6 rounded-xl border flex items-start space-x-3 text-xs leading-normal animate-shake ${error.includes('successful') || error.includes('sent') || error.includes('emailed')
-              ? 'bg-emerald-950/40 border-emerald-900/60 text-emerald-400'
-              : 'bg-red-950/40 border-red-900/60 text-red-400'
+            ? 'bg-emerald-950/40 border-emerald-900/60 text-emerald-400'
+            : 'bg-red-950/40 border-red-900/60 text-red-400'
             }`}>
             <AlertCircle size={16} className="shrink-0 mt-0.5" />
             <span>{error}</span>
@@ -591,25 +730,23 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          
+
           {/* Org creation or join Selector if scope === organization */}
           {authScope === 'organization' && viewMode === 'register' && (
             <div className="flex bg-slate-950 p-1 rounded-xl mb-4 border border-slate-900 animate-fadeIn">
               <button
                 type="button"
                 onClick={() => setOrgAction('join')}
-                className={`flex-1 py-1.5 text-center rounded-lg text-[10px] font-bold uppercase transition-all ${
-                  orgAction === 'join' ? 'bg-indigo-650 text-white' : 'text-slate-500'
-                }`}
+                className={`flex-1 py-1.5 text-center rounded-lg text-[10px] font-bold uppercase transition-all ${orgAction === 'join' ? 'bg-indigo-650 text-white' : 'text-slate-500'
+                  }`}
               >
                 Join Organization
               </button>
               <button
                 type="button"
                 onClick={() => setOrgAction('create')}
-                className={`flex-1 py-1.5 text-center rounded-lg text-[10px] font-bold uppercase transition-all ${
-                  orgAction === 'create' ? 'bg-indigo-650 text-white' : 'text-slate-500'
-                }`}
+                className={`flex-1 py-1.5 text-center rounded-lg text-[10px] font-bold uppercase transition-all ${orgAction === 'create' ? 'bg-indigo-650 text-white' : 'text-slate-500'
+                  }`}
               >
                 Create Organization
               </button>
@@ -852,7 +989,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
               <>
                 {viewMode === 'login' && <span>Sign In</span>}
                 {viewMode === 'register' && (
-                  authScope === 'personal' 
+                  authScope === 'personal'
                     ? <span>Create Account</span>
                     : (orgAction === 'create' ? <span>Create Organization</span> : <span>Join Organization</span>)
                 )}
@@ -865,7 +1002,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
 
         {/* Bottom Toggle switch links */}
         <div className="mt-6 pt-6 border-t border-slate-800/80 flex items-center justify-between text-xs">
-          
+
           {viewMode === 'login' ? (
             <button
               type="button"

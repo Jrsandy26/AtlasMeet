@@ -50,7 +50,7 @@ export default function OrgDashboard({ currentUser, onClose }: OrgDashboardProps
   const [settingsSuccess, setSettingsSuccess] = useState('');
 
   // Fetch org details and members
-  const fetchOrgData = () => {
+  const fetchOrgData = async () => {
     try {
       const orgsStr = localStorage.getItem('atlasmeet_organizations') || '[]';
       const orgs = JSON.parse(orgsStr);
@@ -62,8 +62,14 @@ export default function OrgDashboard({ currentUser, onClose }: OrgDashboardProps
         setOrgDescInput(matchedOrg.description || '');
       }
 
-      const usersStr = localStorage.getItem('atlasmeet_users') || '[]';
-      const users = JSON.parse(usersStr);
+      const res = await fetch('/api/auth/users');
+      if (!res.ok) throw new Error('Failed to retrieve users');
+      const usersRaw = await res.json();
+      const users = usersRaw.map((u: any) => ({
+        ...u,
+        orgId: u.org_id
+      }));
+
       const orgMembers = users.filter((u: any) => u.orgId === currentUser.orgId);
       setMembers(orgMembers);
     } catch (e) {
@@ -90,6 +96,25 @@ export default function OrgDashboard({ currentUser, onClose }: OrgDashboardProps
     setInviteStatus({ type: null, message: '' });
     setLoading(true);
     
+    const logMailSend = async (recipient: string, type: string, status: 'success' | 'failed', details?: string) => {
+      try {
+        await fetch('/api/auth/mail-logs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: `mail-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            recipient,
+            type,
+            status,
+            details: details || '',
+            timestamp: new Date().toISOString()
+          })
+        });
+      } catch (e) {
+        console.error('Failed to log mail send to Supabase:', e);
+      }
+    };
+
     try {
       if (!inviteEmail.trim() || !inviteEmail.includes('@')) {
         throw new Error('Please enter a valid email address.');
@@ -110,9 +135,11 @@ export default function OrgDashboard({ currentUser, onClose }: OrgDashboardProps
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
+        await logMailSend(inviteEmail, 'Org Invitation', 'failed', errData.detail || 'Email invitation dispatch failed.');
         throw new Error(errData.detail || 'Email invitation dispatch failed.');
       }
 
+      await logMailSend(inviteEmail, 'Org Invitation', 'success', `Org: ${org?.name || 'Unknown'}`);
       setInviteStatus({
         type: 'success',
         message: `Invitation successfully emailed to ${inviteEmail}!`
@@ -129,16 +156,25 @@ export default function OrgDashboard({ currentUser, onClose }: OrgDashboardProps
   };
 
   // Change user role (Admin, Member/User, Viewer)
-  const handleChangeRole = (userId: string, targetRole: string) => {
+  const handleChangeRole = async (userId: string, targetRole: string) => {
     try {
-      const usersStr = localStorage.getItem('atlasmeet_users') || '[]';
-      const users = JSON.parse(usersStr);
-      const idx = users.findIndex((u: any) => u.id === userId);
+      const res = await fetch('/api/auth/users');
+      if (!res.ok) throw new Error('Failed to retrieve user list.');
+      const users = await res.json();
+      const user = users.find((u: any) => u.id === userId);
       
-      if (idx !== -1) {
-        users[idx].role = targetRole;
-        localStorage.setItem('atlasmeet_users', JSON.stringify(users));
-        fetchOrgData();
+      if (user) {
+        const updatedUser = {
+          ...user,
+          role: targetRole
+        };
+        const saveRes = await fetch('/api/auth/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updatedUser)
+        });
+        if (!saveRes.ok) throw new Error('Failed to save changed role to database.');
+        await fetchOrgData();
       }
     } catch (e) {
       console.error('Failed to change role:', e);
@@ -146,7 +182,7 @@ export default function OrgDashboard({ currentUser, onClose }: OrgDashboardProps
   };
 
   // Evict member from organization
-  const handleEvictMember = (userId: string) => {
+  const handleEvictMember = async (userId: string) => {
     if (userId === members.find(m => m.username === currentUser.username)?.id) {
       alert('You cannot remove yourself from the organization.');
       return;
@@ -154,16 +190,25 @@ export default function OrgDashboard({ currentUser, onClose }: OrgDashboardProps
     if (!window.confirm('Are you sure you want to remove this member from the organization?')) return;
     
     try {
-      const usersStr = localStorage.getItem('atlasmeet_users') || '[]';
-      const users = JSON.parse(usersStr);
-      const idx = users.findIndex((u: any) => u.id === userId);
+      const res = await fetch('/api/auth/users');
+      if (!res.ok) throw new Error('Failed to retrieve user list.');
+      const users = await res.json();
+      const user = users.find((u: any) => u.id === userId);
       
-      if (idx !== -1) {
+      if (user) {
         // Clear organization association and default back to standard user role
-        delete users[idx].orgId;
-        users[idx].role = 'user';
-        localStorage.setItem('atlasmeet_users', JSON.stringify(users));
-        fetchOrgData();
+        const updatedUser = {
+          ...user,
+          org_id: null,
+          role: 'user'
+        };
+        const saveRes = await fetch('/api/auth/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updatedUser)
+        });
+        if (!saveRes.ok) throw new Error('Failed to save eviction updates to database.');
+        await fetchOrgData();
       }
     } catch (e) {
       console.error('Failed to remove member:', e);

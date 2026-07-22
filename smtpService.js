@@ -69,7 +69,7 @@ export async function sendOtpEmail(email, otp) {
               <tr>
                 <td style="padding: 24px 32px 32px 32px; background-color: #f8fafc; border-top: 1px solid #f1f5f9; text-align: center; font-size: 11px; color: #94a3b8; line-height: 1.5;">
                   <p style="margin: 0 0 8px 0;"><strong>AtlasMeet Global Ltd.</strong></p>
-                  <p style="margin: 0 0 12px 0;">Corporate Security Operations Center (SOC) &bull; London, UK</p>
+                  <p style="margin: 0 0 12px 0;">Corporate Security Operations Center (SOC) &bull; Hosur, India</p>
                   <p style="margin: 0;">This email is auto-generated. Please do not reply directly to this address.</p>
                 </td>
               </tr>
@@ -140,7 +140,7 @@ export async function sendResetEmail(email, username, code) {
               <tr>
                 <td style="padding: 24px 32px 32px 32px; background-color: #f8fafc; border-top: 1px solid #f1f5f9; text-align: center; font-size: 11px; color: #94a3b8; line-height: 1.5;">
                   <p style="margin: 0 0 8px 0;"><strong>AtlasMeet Global Ltd.</strong></p>
-                  <p style="margin: 0 0 12px 0;">Corporate Security Operations Center (SOC) &bull; London, UK</p>
+                  <p style="margin: 0 0 12px 0;">Corporate Security Operations Center (SOC) &bull; Hosur, India</p>
                   <p style="margin: 0;">This email is auto-generated. Please do not reply directly to this address.</p>
                 </td>
               </tr>
@@ -206,7 +206,7 @@ export async function sendInviteEmail(email, orgName, inviteLink) {
               <tr>
                 <td style="padding: 24px 32px 32px 32px; background-color: #f8fafc; border-top: 1px solid #f1f5f9; text-align: center; font-size: 11px; color: #94a3b8; line-height: 1.5;">
                   <p style="margin: 0 0 8px 0;"><strong>AtlasMeet Global Ltd.</strong></p>
-                  <p style="margin: 0 0 12px 0;">Corporate Security Operations Center (SOC) &bull; London, UK</p>
+                  <p style="margin: 0 0 12px 0;">Corporate Security Operations Center (SOC) &bull; Hosur, India</p>
                   <p style="margin: 0;">This email is auto-generated. Please do not reply directly to this address.</p>
                 </td>
               </tr>
@@ -292,7 +292,7 @@ export async function sendMeetingLogEmail(email, username, title, dateTime, tran
               <tr>
                 <td style="padding: 24px 32px 32px 32px; background-color: #f8fafc; border-top: 1px solid #f1f5f9; text-align: center; font-size: 11px; color: #94a3b8; line-height: 1.5;">
                   <p style="margin: 0 0 8px 0;"><strong>AtlasMeet Global Ltd.</strong></p>
-                  <p style="margin: 0 0 12px 0;">Corporate Security Operations Center (SOC) &bull; London, UK</p>
+                  <p style="margin: 0 0 12px 0;">Corporate Security Operations Center (SOC) &bull; Hosur, India</p>
                   <p style="margin: 0;">This email is auto-generated. Please do not reply directly to this address.</p>
                 </td>
               </tr>

@@ -5,6 +5,28 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 import { sendOtpEmail, sendResetEmail, sendInviteEmail, sendMeetingLogEmail } from './smtpService.js';
+import { createAdminClient } from '@supabase/server/core';
+
+let supabaseAdmin = null;
+function getSupabaseAdmin() {
+  if (supabaseAdmin) return supabaseAdmin;
+  try {
+    const secretKey = process.env.SUPABASE_SECRET_KEY;
+    if (secretKey && secretKey.includes('•')) {
+      console.error('\n========================================================================\n' +
+                    'ERROR: SUPABASE_SECRET_KEY in your .env contains bullet points (••••).\n' +
+                    'Please replace it with your actual unmasked Secret/Service Key from the\n' +
+                    'Supabase API Settings for database requests to succeed.\n' +
+                    '========================================================================\n');
+      return null;
+    }
+    supabaseAdmin = createAdminClient();
+    return supabaseAdmin;
+  } catch (e) {
+    console.error('Failed to initialize Supabase Admin Client. Check your env keys.', e);
+    return null;
+  }
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -67,7 +89,8 @@ app.get('/api/config', (req, res) => {
     hasNvidiaKey: !!process.env.NVIDIA_API_KEY,
     hasOpenaiKey: !!process.env.OPENAI_API_KEY,
     hasGroqKey: !!process.env.GROQ_API_KEY,
-    hasGeminiKey: !!process.env.GEMINI_API_KEY
+    hasGeminiKey: !!process.env.GEMINI_API_KEY,
+    hasOpenrouterKey: !!process.env.OPENROUTER_API_KEY
   });
 });
 
@@ -194,6 +217,258 @@ app.post('/api/nvidia/transcribe', async (req, res) => {
   } catch (err) {
     console.error('NVIDIA Transcribe Proxy Error:', err);
     res.status(500).json({ success: false, detail: err.message });
+  }
+});
+
+app.post('/api/groq/chat', async (req, res) => {
+  try {
+    let apiKey = req.headers['authorization'];
+    if (!apiKey || apiKey === 'Bearer ' || apiKey === 'Bearer null' || apiKey === 'Bearer undefined' || apiKey === 'Bearer ""' || apiKey === 'Bearer "server"' || apiKey === 'Bearer server') {
+      if (process.env.GROQ_API_KEY) {
+        apiKey = `Bearer ${process.env.GROQ_API_KEY}`;
+      } else {
+        return res.status(401).json({ success: false, detail: 'Groq API Key not configured on client or server.' });
+      }
+    }
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': apiKey
+      },
+      body: JSON.stringify(req.body)
+    });
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      return res.status(response.status).json(errData);
+    }
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    console.error('Groq chat proxy error:', err);
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+app.post('/api/groq/transcribe', async (req, res) => {
+  try {
+    const { audioBase64, model } = req.body;
+    let apiKey = req.headers['authorization'];
+    if (!apiKey || apiKey === 'Bearer ' || apiKey === 'Bearer null' || apiKey === 'Bearer undefined' || apiKey === 'Bearer ""' || apiKey === 'Bearer "server"' || apiKey === 'Bearer server') {
+      if (process.env.GROQ_API_KEY) {
+        apiKey = `Bearer ${process.env.GROQ_API_KEY}`;
+      } else {
+        return res.status(401).json({ success: false, detail: 'Groq API Key not configured on client or server.' });
+      }
+    }
+
+    if (!audioBase64) {
+      return res.status(400).json({ success: false, detail: 'audioBase64 is required' });
+    }
+
+    const buffer = Buffer.from(audioBase64, 'base64');
+    const formData = new FormData();
+    formData.append('file', new Blob([buffer], { type: 'audio/webm' }), 'audio.webm');
+    formData.append('model', model || 'whisper-large-v3-turbo');
+    formData.append('response_format', 'json');
+
+    const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: {
+        'Authorization': apiKey
+      },
+      body: formData
+    });
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      return res.status(response.status).json(errData);
+    }
+
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    console.error('Groq transcription proxy error:', err);
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+// Supabase Database API Routes
+app.get('/api/auth/users', async (req, res) => {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) {
+    return res.status(500).json({ error: 'Supabase client not initialized. Check server logs.' });
+  }
+  try {
+    const { data, error } = await supabase.from('users').select('*');
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/auth/users', async (req, res) => {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) {
+    return res.status(500).json({ error: 'Supabase client not initialized. Check server logs.' });
+  }
+  try {
+    const user = req.body;
+    const { data, error } = await supabase.from('users').upsert(user).select();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data ? (data[0] || data) : {});
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/auth/users/:id', async (req, res) => {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) {
+    return res.status(500).json({ error: 'Supabase client not initialized. Check server logs.' });
+  }
+  try {
+    const { id } = req.params;
+    const { error } = await supabase.from('users').delete().eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/auth/login-logs', async (req, res) => {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) {
+    return res.status(500).json({ error: 'Supabase client not initialized. Check server logs.' });
+  }
+  try {
+    const { data, error } = await supabase.from('login_logs').select('*').order('timestamp', { ascending: false }).limit(100);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/auth/login-logs', async (req, res) => {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) {
+    return res.status(500).json({ error: 'Supabase client not initialized. Check server logs.' });
+  }
+  try {
+    const log = req.body;
+    const { data, error } = await supabase.from('login_logs').insert(log).select();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data ? (data[0] || data) : {});
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/auth/mail-logs', async (req, res) => {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) {
+    return res.status(500).json({ error: 'Supabase client not initialized. Check server logs.' });
+  }
+  try {
+    const { data, error } = await supabase.from('mail_logs').select('*').order('timestamp', { ascending: false }).limit(100);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/auth/mail-logs', async (req, res) => {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) {
+    return res.status(500).json({ error: 'Supabase client not initialized. Check server logs.' });
+  }
+  try {
+    const log = req.body;
+    const { data, error } = await supabase.from('mail_logs').insert(log).select();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data ? (data[0] || data) : {});
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/auth/reset-requests', async (req, res) => {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) {
+    return res.status(500).json({ error: 'Supabase client not initialized. Check server logs.' });
+  }
+  try {
+    const { data, error } = await supabase.from('reset_requests').select('*');
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/auth/reset-requests', async (req, res) => {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) {
+    return res.status(500).json({ error: 'Supabase client not initialized. Check server logs.' });
+  }
+  try {
+    const request = req.body;
+    const { data, error } = await supabase.from('reset_requests').upsert(request).select();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data ? (data[0] || data) : {});
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/auth/reset-requests/:id', async (req, res) => {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) {
+    return res.status(500).json({ error: 'Supabase client not initialized. Check server logs.' });
+  }
+  try {
+    const { id } = req.params;
+    const { error } = await supabase.from('reset_requests').delete().eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/openrouter/chat', async (req, res) => {
+  try {
+    let apiKey = req.headers['authorization'];
+    if (!apiKey || apiKey === 'Bearer ' || apiKey === 'Bearer null' || apiKey === 'Bearer undefined' || apiKey === 'Bearer ""' || apiKey === 'Bearer "server"' || apiKey === 'Bearer server') {
+      if (process.env.OPENROUTER_API_KEY) {
+        apiKey = `Bearer ${process.env.OPENROUTER_API_KEY}`;
+      } else {
+        return res.status(401).json({ success: false, detail: 'OpenRouter API Key not configured on client or server.' });
+      }
+    }
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': apiKey,
+        'HTTP-Referer': req.headers['referer'] || 'http://localhost:5173',
+        'X-Title': 'AtlasMeet'
+      },
+      body: JSON.stringify(req.body)
+    });
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      return res.status(response.status).json(errData);
+    }
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    console.error('OpenRouter chat proxy error:', err);
+    res.status(500).json({ detail: err.message });
   }
 });
 

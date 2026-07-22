@@ -58,19 +58,21 @@ export default function App() {
   // Transcription & Summary settings (saved in localStorage)
   const [transcribeProvider, setTranscribeProvider] = useState<'webspeech' | 'groq' | 'openai' | 'custom' | 'nvidia'>('webspeech');
   const [transcribeCustomEndpoint, setTranscribeCustomEndpoint] = useState('http://localhost:8000/v1/audio/transcriptions');
-  const [summaryProvider, setSummaryProvider] = useState<'ollama' | 'gemini' | 'openai' | 'groq' | 'nvidia'>('gemini');
+  const [summaryProvider, setSummaryProvider] = useState<'ollama' | 'gemini' | 'openai' | 'groq' | 'nvidia' | 'openrouter'>('gemini');
   
   // API Keys / Settings
   const [openaiKey, setOpenaiKey] = useState('');
   const [groqKey, setGroqKey] = useState('');
   const [geminiKey, setGeminiKey] = useState('');
   const [nvidiaKey, setNvidiaKey] = useState('');
+  const [openrouterKey, setOpenrouterKey] = useState('');
   const [ollamaEndpoint, setOllamaEndpoint] = useState('http://localhost:11434');
   const [ollamaModel, setOllamaModel] = useState('gemma2:2b');
   const [openaiModel, setOpenaiModel] = useState('gpt-4o-mini');
   const [groqModel, setGroqModel] = useState('llama-3.3-70b-versatile');
   const [geminiModel, setGeminiModel] = useState('gemini-1.5-flash');
   const [nvidiaModel, setNvidiaModel] = useState('meta/llama-3.3-70b-instruct');
+  const [openrouterModel, setOpenrouterModel] = useState('google/gemma-2-9b-it:free');
 
   // Active meeting states
   const [activeMeetingNotes, setActiveMeetingNotes] = useState('');
@@ -114,12 +116,32 @@ export default function App() {
   const [viewState, setViewState] = useState<'homepage' | 'app' | 'documentation' | 'api' | 'support'>('homepage');
   const [showPostMeetingModal, setShowPostMeetingModal] = useState<string | null>(null);
   const [emailSendingState, setEmailSendingState] = useState<{ [meetingId: string]: 'idle' | 'sending' | 'sent' | 'error' }>({});
-  const [serverConfig, setServerConfig] = useState<{ hasNvidiaKey: boolean; hasOpenaiKey: boolean; hasGroqKey: boolean; hasGeminiKey: boolean } | null>(null);
+  const [serverConfig, setServerConfig] = useState<{ hasNvidiaKey: boolean; hasOpenaiKey: boolean; hasGroqKey: boolean; hasGeminiKey: boolean; hasOpenrouterKey: boolean } | null>(null);
   const [sendingLog, setSendingLog] = useState(false);
   const [logSent, setLogSent] = useState(false);
   const [showConfirmEmail, setShowConfirmEmail] = useState(false);
   const [logError, setLogError] = useState('');
 
+  const logMailSend = async (recipient: string, type: string, status: 'success' | 'failed', details?: string) => {
+    try {
+      await fetch('/api/auth/mail-logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: `mail-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          recipient,
+          type,
+          status,
+          details: details || '',
+          timestamp: new Date().toISOString()
+        })
+      });
+    } catch (e) {
+      console.error('Failed to log mail send to Supabase:', e);
+    }
+  };
+
+  // Startup splash loader timer
   useEffect(() => {
     const timer = setTimeout(() => {
       setIsSplashActive(false);
@@ -139,60 +161,64 @@ export default function App() {
       alert(`AtlasMeet Invite Parsed! Pre-filling Organization invite code: ${invite}`);
     }
 
-    // Upgrade 'sai' to organization admin if present
-    try {
-      const usersStr = localStorage.getItem('atlasmeet_users') || '[]';
-      const users = JSON.parse(usersStr);
-      let upgraded = false;
+    // Initialize main_admin* and migrate 'sai' in Supabase database
+    const initMainAdmin = async () => {
+      try {
+        const res = await fetch('/api/auth/users');
+        if (!res.ok) return;
+        const users = await res.json();
 
-      const targetIdx = users.findIndex((u: any) => 
-        u.username === 'sai' || 
-        u.email === 'sandeepsai1915@gmail.com'
-      );
+        // Ensure main_admin* exists
+        const mainAdminExists = users.some((u: any) => u.username === 'main_admin*');
+        if (!mainAdminExists) {
+          await fetch('/api/auth/users', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: 'user-main-admin',
+              username: 'main_admin*',
+              email: 'sandeepsai1915@gmail.com',
+              password: 'sai@2004',
+              role: 'admin',
+              recovery_code: 'ATLAS-MAIN-ADMN-2026',
+              created_at: new Date().toISOString()
+            })
+          });
+        }
 
-      if (targetIdx !== -1) {
-        const user = users[targetIdx];
-        if (!user.orgId) {
-          const orgsStr = localStorage.getItem('atlasmeet_organizations') || '[]';
-          const orgs = JSON.parse(orgsStr);
-          
-          const defaultOrg = {
-            id: 'org-atlasmeet-enterprise',
-            name: 'AtlasMeet Enterprise',
-            description: 'Corporate Workspace for TVS and partner teams',
-            org_code: 'ATL-5892',
-            invite_code: 'ATL-9K7M-PQ25',
-            created_at: new Date().toISOString()
-          };
-
-          if (!orgs.some((o: any) => o.id === defaultOrg.id)) {
-            orgs.push(defaultOrg);
-            localStorage.setItem('atlasmeet_organizations', JSON.stringify(orgs));
-          }
-
-          users[targetIdx].orgId = defaultOrg.id;
-          users[targetIdx].role = 'admin'; // Organization Admin
-          upgraded = true;
-
-          // If current logged in session matches, update session storage
-          const sessionUser = localStorage.getItem('currentUser');
-          if (sessionUser) {
-            const parsed = JSON.parse(sessionUser);
-            if (parsed.username === user.username) {
-              parsed.orgId = defaultOrg.id;
-              parsed.role = 'admin';
-              localStorage.setItem('currentUser', JSON.stringify(parsed));
+        // Upgrade 'sai' to organization admin in Supabase if present
+        const targetIdx = users.findIndex((u: any) => u.username === 'sai');
+        if (targetIdx !== -1) {
+          const user = users[targetIdx];
+          if (!user.org_id) {
+            await fetch('/api/auth/users', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                ...user,
+                org_id: 'org-atlasmeet-enterprise',
+                role: 'admin'
+              })
+            });
+            
+            // Sync local currentUser session if logged in as 'sai'
+            const sessionUser = localStorage.getItem('currentUser');
+            if (sessionUser) {
+              const parsed = JSON.parse(sessionUser);
+              if (parsed.username === 'sai') {
+                parsed.orgId = 'org-atlasmeet-enterprise';
+                parsed.role = 'admin';
+                localStorage.setItem('currentUser', JSON.stringify(parsed));
+              }
             }
           }
         }
+      } catch (e) {
+        console.error('Failed to migrate sai or inject main_admin*:', e);
       }
+    };
 
-      if (upgraded) {
-        localStorage.setItem('atlasmeet_users', JSON.stringify(users));
-      }
-    } catch (e) {
-      console.error('Failed to migrate sai to organization admin:', e);
-    }
+    initMainAdmin();
   }, []);
 
   // Check authentication status on mount
@@ -319,6 +345,8 @@ export default function App() {
     setGroqModel(localStorage.getItem('groqModel') || 'llama-3.3-70b-versatile');
     setGeminiModel(localStorage.getItem('geminiModel') || 'gemini-1.5-flash');
     setNvidiaModel(localStorage.getItem('nvidiaModel') || 'meta/llama-3.3-70b-instruct');
+    setOpenrouterKey(localStorage.getItem('openrouterKey') || '');
+    setOpenrouterModel(localStorage.getItem('openrouterModel') || 'google/gemma-2-9b-it:free');
     setUserName(localStorage.getItem('userName') || 'Meeting Organizer');
 
     // Query server for pre-configured keys in .env
@@ -367,7 +395,7 @@ export default function App() {
       activeModelName = 'nvidia/parakeet-tdt-0.6b-v3';
     } else if (isGroqEnabled) {
       activeKey = groqKey || 'server_key';
-      activeModelName = groqModel;
+      activeModelName = 'whisper-large-v3-turbo';
     } else if (isOpenAIEnabled) {
       activeKey = openaiKey || 'server_key';
       activeModelName = 'whisper-1';
@@ -378,7 +406,7 @@ export default function App() {
     } else if (groqKey || serverConfig?.hasGroqKey) {
       activeProvider = 'groq';
       activeKey = groqKey || 'server_key';
-      activeModelName = groqModel;
+      activeModelName = 'whisper-large-v3-turbo';
     } else if (openaiKey || serverConfig?.hasOpenaiKey) {
       activeProvider = 'openai';
       activeKey = openaiKey || 'server_key';
@@ -501,6 +529,68 @@ export default function App() {
     }
   };
 
+  const translateTextLLM = async (text: string, sourceLang: string, targetLang: string): Promise<string> => {
+    try {
+      const hasKey = summaryProvider === 'ollama' || 
+                    (summaryProvider === 'gemini' && (geminiKey || serverConfig?.hasGeminiKey)) || 
+                    (summaryProvider === 'openai' && (openaiKey || serverConfig?.hasOpenaiKey)) || 
+                    (summaryProvider === 'nvidia' && (nvidiaKey || serverConfig?.hasNvidiaKey)) || 
+                    (summaryProvider === 'groq' && (groqKey || serverConfig?.hasGroqKey)) ||
+                    (summaryProvider === 'openrouter' && (openrouterKey || serverConfig?.hasOpenrouterKey));
+      if (!hasKey) return '';
+
+      const config: LLMConfig = {
+        provider: summaryProvider,
+        apiKey: summaryProvider === 'gemini' ? (geminiKey || 'server') : summaryProvider === 'openai' ? (openaiKey || 'server') : summaryProvider === 'nvidia' ? (nvidiaKey || 'server') : summaryProvider === 'openrouter' ? (openrouterKey || 'server') : (groqKey || 'server'),
+        model: summaryProvider === 'ollama' ? ollamaModel : summaryProvider === 'gemini' ? geminiModel : summaryProvider === 'openai' ? openaiModel : summaryProvider === 'nvidia' ? nvidiaModel : summaryProvider === 'openrouter' ? openrouterModel : groqModel,
+        customEndpoint: summaryProvider === 'ollama' ? ollamaEndpoint : undefined,
+      };
+
+      return await summaryService.translate(text, sourceLang, targetLang, config);
+    } catch (e) {
+      console.error('LLM translation fallback error:', e);
+      return '';
+    }
+  };
+
+  const translateTextGoogleFree = async (text: string, sourceLang: string, targetLang: string): Promise<string> => {
+    try {
+      const langCodes: { [key: string]: string } = {
+        'auto': 'auto',
+        'English': 'en',
+        'Urdu': 'ur',
+        'Spanish': 'es',
+        'French': 'fr',
+        'German': 'de',
+        'Hindi': 'hi',
+        'Arabic': 'ar',
+        'Mandarin': 'zh',
+        'Japanese': 'ja',
+        'Tamil': 'ta'
+      };
+
+      const sourceCode = langCodes[sourceLang] || 'auto';
+      const targetCode = langCodes[targetLang] || 'ja';
+
+      if (sourceCode === targetCode) {
+        return text;
+      }
+
+      const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sourceCode}&tl=${targetCode}&dt=t&q=${encodeURIComponent(text)}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data[0]) {
+          const parts = data[0].map((x: any) => x[0]).filter(Boolean);
+          return parts.join('');
+        }
+      }
+    } catch (e) {
+      console.error('Google Free translation API error:', e);
+    }
+    return '';
+  };
+
   const translateTextFree = async (text: string, sourceLang: string, targetLang: string): Promise<string> => {
     try {
       const langCodes: { [key: string]: string } = {
@@ -520,17 +610,30 @@ export default function App() {
       const sourceCode = langCodes[sourceLang] || 'auto';
       const targetCode = langCodes[targetLang] || 'ja';
 
+      if (sourceCode === targetCode) {
+        return text;
+      }
+
       const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${sourceCode}|${targetCode}`;
       const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
-        if (data.responseData && data.responseData.translatedText) {
+        if (data.responseData && data.responseData.translatedText && !data.responseData.translatedText.includes('INVALID QUERY')) {
           return data.responseData.translatedText;
         }
       }
     } catch (e) {
       console.error('Free translation API error:', e);
     }
+
+    // Try Google Translate Free API next
+    const googleFallback = await translateTextGoogleFree(text, sourceLang, targetLang);
+    if (googleFallback) return googleFallback;
+
+    // Fallback to LLM translation if all free translation failed
+    const fallback = await translateTextLLM(text, sourceLang, targetLang);
+    if (fallback) return fallback;
+
     return '';
   };
 
@@ -543,7 +646,8 @@ export default function App() {
                     (summaryProvider === 'gemini' && (geminiKey || serverConfig?.hasGeminiKey)) || 
                     (summaryProvider === 'openai' && (openaiKey || serverConfig?.hasOpenaiKey)) || 
                     (summaryProvider === 'nvidia' && (nvidiaKey || serverConfig?.hasNvidiaKey)) || 
-                    (summaryProvider === 'groq' && (groqKey || serverConfig?.hasGroqKey));
+                    (summaryProvider === 'groq' && (groqKey || serverConfig?.hasGroqKey)) ||
+                    (summaryProvider === 'openrouter' && (openrouterKey || serverConfig?.hasOpenrouterKey));
 
       let responseText = '';
       if (hasKey) {
@@ -553,8 +657,8 @@ export default function App() {
 
         const config: LLMConfig = {
           provider: summaryProvider,
-          apiKey: summaryProvider === 'gemini' ? (geminiKey || 'server') : summaryProvider === 'openai' ? (openaiKey || 'server') : summaryProvider === 'nvidia' ? (nvidiaKey || 'server') : (groqKey || 'server'),
-          model: summaryProvider === 'ollama' ? ollamaModel : summaryProvider === 'gemini' ? geminiModel : summaryProvider === 'openai' ? openaiModel : summaryProvider === 'nvidia' ? nvidiaModel : groqModel,
+          apiKey: summaryProvider === 'gemini' ? (geminiKey || 'server') : summaryProvider === 'openai' ? (openaiKey || 'server') : summaryProvider === 'nvidia' ? (nvidiaKey || 'server') : summaryProvider === 'openrouter' ? (openrouterKey || 'server') : (groqKey || 'server'),
+          model: summaryProvider === 'ollama' ? ollamaModel : summaryProvider === 'gemini' ? geminiModel : summaryProvider === 'openai' ? openaiModel : summaryProvider === 'nvidia' ? nvidiaModel : summaryProvider === 'openrouter' ? openrouterModel : groqModel,
           customEndpoint: summaryProvider === 'ollama' ? ollamaEndpoint : undefined,
         };
 
@@ -565,23 +669,48 @@ export default function App() {
           config
         );
       } else {
-        // Free Translation - Batched to prevent rate limiting and extreme latency
-        const batchSize = 10;
-        const translatedLines = [];
-        
-        for (let i = 0; i < activeMeetingTranscripts.length; i += batchSize) {
-          const batch = activeMeetingTranscripts.slice(i, i + batchSize);
+        // Free Translation - Dynamically batch segments under 400 characters to respect MyMemory length limits
+        const translatedLines: string[] = [];
+        let currentBatch: TranscriptSegment[] = [];
+        let currentLength = 0;
+
+        const processBatch = async (batch: TranscriptSegment[]) => {
+          if (batch.length === 0) return;
           const batchText = batch.map(s => s.text).join(' || ');
-          
           const translatedBatchText = await translateTextFree(batchText, sourceLang, targetLang);
-          const splitLines = translatedBatchText.split(/\|\|/);
           
-          for (let j = 0; j < batch.length; j++) {
-            const original = batch[j];
-            const translatedText = splitLines[j] || original.text;
-            translatedLines.push(`[${formatTime(original.audioStartTime || 0)}] ${translatedText.trim()}`);
+          if (!translatedBatchText || translatedBatchText.includes('INVALID QUERY')) {
+            // Self-healing: Fall back to translating each segment individually if batch returns query limit error
+            for (const segment of batch) {
+              const singleTranslation = await translateTextFree(segment.text, sourceLang, targetLang);
+              const resultText = (singleTranslation && !singleTranslation.includes('INVALID QUERY'))
+                ? singleTranslation
+                : segment.text;
+              translatedLines.push(`[${formatTime(segment.audioStartTime || 0)}] ${resultText.trim()}`);
+            }
+          } else {
+            const splitLines = translatedBatchText.split(/\|\|/);
+            for (let j = 0; j < batch.length; j++) {
+              const original = batch[j];
+              const translatedText = splitLines[j] || original.text;
+              translatedLines.push(`[${formatTime(original.audioStartTime || 0)}] ${translatedText.trim()}`);
+            }
+          }
+        };
+
+        for (const segment of activeMeetingTranscripts) {
+          const segmentLen = segment.text.length;
+          if (currentLength + segmentLen + (currentBatch.length > 0 ? 4 : 0) > 400) {
+            await processBatch(currentBatch);
+            currentBatch = [segment];
+            currentLength = segmentLen;
+          } else {
+            currentBatch.push(segment);
+            currentLength += segmentLen + (currentBatch.length > 1 ? 4 : 0);
           }
         }
+        await processBatch(currentBatch);
+
         responseText = translatedLines.join('\n');
       }
 
@@ -941,7 +1070,7 @@ export default function App() {
       setActiveTab('transcript');
       setAudioPlaybackTime(0);
       setTranslatedTranscripts([]);
-      setShowTranslation(false);
+      setShowTranslation(isLiveTranslateEnabled);
     }
   }, [activeMeetingId]);
 
@@ -978,7 +1107,9 @@ export default function App() {
     }
   };
 
-  const handleLoginSuccess = (token: string, user: { username: string; role: string; orgId?: string }) => {
+  const [lastActivity, setLastActivity] = useState<number>(Date.now());
+
+  const handleLoginSuccess = (token: string, user: { username: string; role: string; orgId?: string; session_token?: string }) => {
     const dbNamespace = user.orgId ? user.orgId : user.username;
     switchUserDatabase(dbNamespace); 
     setAuthToken(token);
@@ -987,6 +1118,10 @@ export default function App() {
     localStorage.setItem('authToken', token);
     localStorage.setItem('currentUser', JSON.stringify(user));
     localStorage.setItem('loginTimestamp', Date.now().toString());
+    if (user.session_token) {
+      localStorage.setItem('currentUserSessionToken', user.session_token);
+    }
+    setLastActivity(Date.now()); // reset activity on login
   };
 
   const handleLogout = () => {
@@ -998,7 +1133,70 @@ export default function App() {
     localStorage.removeItem('authToken');
     localStorage.removeItem('currentUser');
     localStorage.removeItem('loginTimestamp');
+    localStorage.removeItem('currentUserSessionToken');
   };
+
+  // Inactivity timeout handler
+  useEffect(() => {
+    if (!authToken) return;
+
+    const resetActivity = () => {
+      setLastActivity(Date.now());
+    };
+
+    window.addEventListener('mousemove', resetActivity);
+    window.addEventListener('keydown', resetActivity);
+    window.addEventListener('click', resetActivity);
+    window.addEventListener('scroll', resetActivity);
+
+    const interval = setInterval(() => {
+      const inactiveTime = Date.now() - lastActivity;
+      if (inactiveTime > 30 * 60 * 1000) { // 30 minutes inactivity
+        alert('You have been logged out due to 30 minutes of inactivity.');
+        handleLogout();
+      }
+    }, 10000); // Check every 10 seconds
+
+    return () => {
+      window.removeEventListener('mousemove', resetActivity);
+      window.removeEventListener('keydown', resetActivity);
+      window.removeEventListener('click', resetActivity);
+      window.removeEventListener('scroll', resetActivity);
+      clearInterval(interval);
+    };
+  }, [authToken, lastActivity]);
+
+  // Concurrent/Single Session Enforcement
+  useEffect(() => {
+    if (!authToken || !currentUser) return;
+
+    const checkSessionToken = async () => {
+      try {
+        const localToken = localStorage.getItem('currentUserSessionToken');
+        if (!localToken) return;
+
+        const res = await fetch('/api/auth/users');
+        if (!res.ok) return;
+        const users = await res.json();
+        const dbUser = users.find((u: any) => u.username === currentUser.username);
+        
+        if (dbUser && dbUser.session_token && dbUser.session_token !== localToken) {
+          alert('Your session has expired because you logged in from another device/browser.');
+          handleLogout();
+        }
+      } catch (e) {
+        console.error('Failed to verify session token:', e);
+      }
+    };
+
+    window.addEventListener('focus', checkSessionToken);
+    const interval = setInterval(checkSessionToken, 15000);
+
+    return () => {
+      window.removeEventListener('focus', checkSessionToken);
+      clearInterval(interval);
+    };
+  }, [authToken, currentUser]);
 
   const handleLaunchApp = () => {
     setViewState('app');
@@ -1116,7 +1314,7 @@ export default function App() {
           const cloudText = await transcriptionService.transcribeWithNvidia(blob, nvidiaKey, 'nvidia/parakeet-tdt-0.6b-v3');
           await processCloudTranscript(activeMeetingId, cloudText);
         } else if (transcribeProvider === 'groq' && (groqKey || serverConfig?.hasGroqKey)) {
-          const cloudText = await transcriptionService.transcribeWithGroq(blob, groqKey, groqModel);
+          const cloudText = await transcriptionService.transcribeWithGroq(blob, groqKey, 'whisper-large-v3-turbo');
           await processCloudTranscript(activeMeetingId, cloudText);
         } else if (transcribeProvider === 'openai' && (openaiKey || serverConfig?.hasOpenaiKey)) {
           const cloudText = await transcriptionService.transcribeWithOpenAI(blob, openaiKey);
@@ -1148,11 +1346,16 @@ export default function App() {
 
   // Replace live transcripts with high-accuracy cloud transcription
   const processCloudTranscript = async (meetingId: string, fullText: string) => {
+    if (!fullText || fullText.trim().length === 0) {
+      console.warn('Post-processing cloud transcription returned empty text. Keeping live drafts.');
+      return;
+    }
+
     // Clear old real-time drafts for this meeting
     await db.transcripts.where('meetingId').equals(meetingId).delete();
 
     // Split text roughly into sentences or paragraphs for segments
-    const sentences = (fullText.match(/[^.!?]+[.!?]+(\s|$)/g) || [fullText]).map(s => s.trim()).filter(Boolean);
+    const sentences = (fullText.match(/[^.!?。？]+[.!?。？]+(\s|$)/g) || [fullText]).map(s => s.trim()).filter(Boolean);
     let sequenceId = 0;
 
     const meeting = await db.meetings.get(meetingId);
@@ -1163,9 +1366,16 @@ export default function App() {
     for (const sentence of sentences) {
       const audioStartTime = idx * sentenceDuration;
       const audioEndTime = (idx + 1) * sentenceDuration;
+      
+      let translatedText = '';
+      if (isLiveTranslateEnabled) {
+        translatedText = await translateTextFree(sentence, liveSourceLang, liveTargetLang);
+      }
+
       await db.transcripts.add({
         meetingId,
         text: sentence,
+        translatedText: translatedText || undefined,
         timestamp: new Date().toLocaleTimeString(),
         confidence: 1.0,
         sequenceId: sequenceId++,
@@ -1190,8 +1400,8 @@ export default function App() {
 
       const config: LLMConfig = {
         provider: summaryProvider,
-        apiKey: summaryProvider === 'gemini' ? (geminiKey || 'server') : summaryProvider === 'openai' ? (openaiKey || 'server') : summaryProvider === 'nvidia' ? (nvidiaKey || 'server') : (groqKey || 'server'),
-        model: summaryProvider === 'ollama' ? ollamaModel : summaryProvider === 'gemini' ? geminiModel : summaryProvider === 'openai' ? openaiModel : summaryProvider === 'nvidia' ? nvidiaModel : groqModel,
+        apiKey: summaryProvider === 'gemini' ? (geminiKey || 'server') : summaryProvider === 'openai' ? (openaiKey || 'server') : summaryProvider === 'nvidia' ? (nvidiaKey || 'server') : summaryProvider === 'openrouter' ? (openrouterKey || 'server') : (groqKey || 'server'),
+        model: summaryProvider === 'ollama' ? ollamaModel : summaryProvider === 'gemini' ? geminiModel : summaryProvider === 'openai' ? openaiModel : summaryProvider === 'nvidia' ? nvidiaModel : summaryProvider === 'openrouter' ? openrouterModel : groqModel,
         customEndpoint: summaryProvider === 'ollama' ? ollamaEndpoint : undefined,
       };
 
@@ -1315,8 +1525,11 @@ export default function App() {
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
+        logMailSend(targetEmail, 'Meeting Export Email', 'failed', errData.detail || 'Email log dispatch failed.');
         throw new Error(errData.detail || 'Email log dispatch failed.');
       }
+
+      logMailSend(targetEmail, 'Meeting Export Email', 'success', `Title: ${meeting.title}`);
 
       setEmailSendingState(prev => ({ ...prev, [meetingId]: 'sent' }));
       setTimeout(() => {
@@ -1391,8 +1604,11 @@ export default function App() {
 
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
+          logMailSend(targetEmail, 'Post-Meeting Export Email', 'failed', errData.detail || 'Email log dispatch failed.');
           throw new Error(errData.detail || 'Email log dispatch failed.');
         }
+
+        logMailSend(targetEmail, 'Post-Meeting Export Email', 'success', `Title: ${activeMeeting.title}`);
 
         setLogSent(true);
         setShowConfirmEmail(false);
@@ -2655,6 +2871,7 @@ export default function App() {
                     { id: 'openai', label: 'OpenAI' },
                     { id: 'groq', label: 'Groq' },
                     { id: 'nvidia', label: 'Nvidia' },
+                    { id: 'openrouter', label: 'OpenRouter' },
                     { id: 'ollama', label: 'Ollama' }
                   ].map((p) => (
                     <button
@@ -2850,7 +3067,39 @@ export default function App() {
                     )}
                   </div>
                 )}
-
+                {summaryProvider === 'openrouter' && (
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-500 mb-1">OpenRouter API Key</label>
+                      <input
+                        type="password"
+                        placeholder={serverConfig?.hasOpenrouterKey ? "Configured on server via .env" : "sk-or-..."}
+                        value={openrouterKey}
+                        onChange={(e) => {
+                          setOpenrouterKey(e.target.value);
+                          saveSetting('openrouterKey', e.target.value);
+                        }}
+                        className="w-full border border-slate-200 outline-none focus:border-purple-600 rounded-lg p-2 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-500 mb-1">OpenRouter Model</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. google/gemma-2-9b-it:free"
+                        value={openrouterModel}
+                        onChange={(e) => {
+                          setOpenrouterModel(e.target.value);
+                          saveSetting('openrouterModel', e.target.value);
+                        }}
+                        className="w-full border border-slate-200 outline-none focus:border-purple-600 rounded-lg p-2 text-xs"
+                      />
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        Use free models (e.g. <code className="bg-slate-100 px-1 py-0.5 rounded">google/gemma-2-9b-it:free</code>, <code className="bg-slate-100 px-1 py-0.5 rounded">meta-llama/llama-3-8b-instruct:free</code>) or any model from OpenRouter catalog.
+                      </p>
+                    </div>
+                  </div>
+                )}
                 {summaryProvider === 'ollama' && (
                   <div className="space-y-3">
                     <div>

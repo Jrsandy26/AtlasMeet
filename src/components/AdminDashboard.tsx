@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import type { FormEvent } from 'react';
-import { Database, User, ShieldAlert, Cpu, HardDrive, Trash2, ArrowLeft, RefreshCw, Layers, Check, X, UserPlus, Key } from 'lucide-react';
+import { Database, User, ShieldAlert, Cpu, Trash2, ArrowLeft, RefreshCw, Layers, Check, X, UserPlus, Key, Mail } from 'lucide-react';
 
 interface UserInfo {
   id: string;
@@ -17,6 +17,23 @@ interface ResetRequest {
   code: string;
   status: 'pending' | 'approved';
   created_at: string;
+}
+
+interface LoginLog {
+  id: string;
+  username: string;
+  status: 'success' | 'failed';
+  details: string;
+  timestamp: string;
+}
+
+interface MailLog {
+  id: string;
+  recipient: string;
+  type: string;
+  status: 'success' | 'failed';
+  details: string;
+  timestamp: string;
 }
 
 interface Metrics {
@@ -44,6 +61,9 @@ interface AdminDashboardProps {
 export default function AdminDashboard({ token, currentUserRole, onClose }: AdminDashboardProps) {
   const [users, setUsers] = useState<UserInfo[]>([]);
   const [resetRequests, setResetRequests] = useState<ResetRequest[]>([]);
+  const [loginLogs, setLoginLogs] = useState<LoginLog[]>([]);
+  const [mailLogs, setMailLogs] = useState<MailLog[]>([]);
+  const [activeTab, setActiveTab] = useState<'users' | 'logins' | 'emails'>('users');
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -62,22 +82,39 @@ export default function AdminDashboard({ token, currentUserRole, onClose }: Admi
   const fetchData = async () => {
     setError('');
     try {
-      // Fetch users from localStorage
-      const usersStr = localStorage.getItem('atlasmeet_users') || '[]';
-      const usersData = JSON.parse(usersStr);
+      // Fetch users from Supabase API
+      const usersRes = await fetch('/api/auth/users');
+      if (!usersRes.ok) {
+        const errData = await usersRes.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to fetch users database.');
+      }
+      const usersRaw = await usersRes.json();
+      const usersData = (usersRaw || []).map((u: any) => ({
+        ...u,
+        orgId: u.org_id
+      }));
       setUsers(usersData);
 
-      // Fetch reset requests from localStorage
-      const reqsStr = localStorage.getItem('atlasmeet_reset_requests') || '[]';
-      const reqsData = JSON.parse(reqsStr);
+      // Fetch reset requests from Supabase API
+      const reqsRes = await fetch('/api/auth/reset-requests');
+      const reqsData = reqsRes.ok ? await reqsRes.json() : [];
       setResetRequests(reqsData);
+
+      // Fetch login attempts logs
+      const loginsRes = await fetch('/api/auth/login-logs');
+      const loginsData = loginsRes.ok ? await loginsRes.json() : [];
+      setLoginLogs(loginsData);
+
+      // Fetch mail logs
+      const mailsRes = await fetch('/api/auth/mail-logs');
+      const mailsData = mailsRes.ok ? await mailsRes.json() : [];
+      setMailLogs(mailsData);
 
       // Generate realistic metrics
       const cpuVal = Math.floor(18 + Math.random() * 15);
       const ramPercent = Math.floor(45 + Math.random() * 8);
       const ramUsed = Math.round((16384 * ramPercent) / 100);
-      const storageBytes = JSON.stringify(localStorage).length;
-      const dbSizeKb = Math.round(storageBytes / 10.24) / 100 + 42.5;
+      const dbSizeKb = 42.5 + (usersData.length * 0.45); // Approximate size based on Supabase tables
 
       setMetrics({
         system: {
@@ -152,17 +189,17 @@ export default function AdminDashboard({ token, currentUserRole, onClose }: Admi
     }
 
     try {
-      const usersStr = localStorage.getItem('atlasmeet_users') || '[]';
-      let usersList = JSON.parse(usersStr);
-      usersList = usersList.filter((u: any) => u.id !== userId);
-      localStorage.setItem('atlasmeet_users', JSON.stringify(usersList));
-      fetchData();
+      const delRes = await fetch(`/api/auth/users/${userId}`, {
+        method: 'DELETE'
+      });
+      if (!delRes.ok) throw new Error('Failed to delete user.');
+      await fetchData();
     } catch (err: any) {
       alert(err.message || 'Error deleting user');
     }
   };
 
-  const handleAddUser = (e: FormEvent) => {
+  const handleAddUser = async (e: FormEvent) => {
     e.preventDefault();
     setAddError('');
     setAddSuccess('');
@@ -183,8 +220,9 @@ export default function AdminDashboard({ token, currentUserRole, onClose }: Admi
     }
 
     try {
-      const usersStr = localStorage.getItem('atlasmeet_users') || '[]';
-      const usersList = JSON.parse(usersStr);
+      const res = await fetch('/api/auth/users');
+      if (!res.ok) throw new Error('Failed to retrieve user list.');
+      const usersList = await res.json();
 
       const exists = usersList.some((u: any) => u.username === newUsername);
       if (exists) {
@@ -192,48 +230,61 @@ export default function AdminDashboard({ token, currentUserRole, onClose }: Admi
         return;
       }
 
-      usersList.push({
-        id: `user-${Date.now()}`,
-        username: newUsername,
-        email: newEmail,
-        password: newPassword,
-        role: newRole,
-        created_at: new Date().toISOString()
+      const saveRes = await fetch('/api/auth/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: `user-${Date.now()}`,
+          username: newUsername,
+          email: newEmail,
+          password: newPassword,
+          role: newRole,
+          created_at: new Date().toISOString()
+        })
       });
+      if (!saveRes.ok) throw new Error('Failed to save new user to database.');
 
-      localStorage.setItem('atlasmeet_users', JSON.stringify(usersList));
       setNewUsername('');
       setNewEmail('');
       setNewPassword('');
       setAddSuccess(`User "${newUsername}" successfully added as an ${newRole}!`);
-      fetchData();
+      await fetchData();
     } catch (err: any) {
-      setAddError('Failed to manually create user.');
+      setAddError(err.message || 'Failed to manually create user.');
     }
   };
 
-  const handleApproveReset = (reqId: string) => {
+  const handleApproveReset = async (reqId: string) => {
     try {
-      const reqsStr = localStorage.getItem('atlasmeet_reset_requests') || '[]';
-      const reqs = JSON.parse(reqsStr);
-      const idx = reqs.findIndex((r: any) => r.id === reqId);
-      if (idx !== -1) {
-        reqs[idx].status = 'approved';
-        localStorage.setItem('atlasmeet_reset_requests', JSON.stringify(reqs));
-        fetchData();
+      const res = await fetch('/api/auth/reset-requests');
+      if (!res.ok) throw new Error('Failed to retrieve reset requests.');
+      const reqs = await res.json();
+      const req = reqs.find((r: any) => r.id === reqId);
+      if (req) {
+        const updatedReq = {
+          ...req,
+          status: 'approved'
+        };
+        const saveRes = await fetch('/api/auth/reset-requests', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updatedReq)
+        });
+        if (!saveRes.ok) throw new Error('Failed to save approved reset request.');
+        await fetchData();
       }
     } catch (err) {
       console.error('Failed to approve reset request:', err);
     }
   };
 
-  const handleDenyReset = (reqId: string) => {
+  const handleDenyReset = async (reqId: string) => {
     try {
-      const reqsStr = localStorage.getItem('atlasmeet_reset_requests') || '[]';
-      let reqs = JSON.parse(reqsStr);
-      reqs = reqs.filter((r: any) => r.id !== reqId);
-      localStorage.setItem('atlasmeet_reset_requests', JSON.stringify(reqs));
-      fetchData();
+      const res = await fetch(`/api/auth/reset-requests/${reqId}`, {
+        method: 'DELETE'
+      });
+      if (!res.ok) throw new Error('Failed to delete reset request.');
+      await fetchData();
     } catch (err) {
       console.error('Failed to deny reset request:', err);
     }
@@ -295,9 +346,22 @@ export default function AdminDashboard({ token, currentUserRole, onClose }: Admi
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm flex items-center justify-between">
               <div className="space-y-1">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">CPU Utilization</span>
-                <span className="text-2xl font-extrabold text-slate-800">{metrics.system.cpu_percent}%</span>
-                <span className="text-[10px] text-slate-500 block">Host Processor</span>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Active Users</span>
+                <span className="text-2xl font-extrabold text-slate-800 animate-pulse">
+                  {Math.max(1, new Set(loginLogs.filter(l => l.status === 'success').map(l => l.username)).size)}
+                </span>
+                <span className="text-[10px] text-slate-500 block">Unique users logged in</span>
+              </div>
+              <div className="w-12 h-12 rounded-full bg-emerald-50 flex items-center justify-center shrink-0">
+                <User className="text-emerald-500" size={24} />
+              </div>
+            </div>
+
+            <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm flex items-center justify-between">
+              <div className="space-y-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Login Attempts</span>
+                <span className="text-2xl font-extrabold text-slate-800">{loginLogs.length}</span>
+                <span className="text-[10px] text-slate-500 block">Success & Failures</span>
               </div>
               <div className="w-12 h-12 rounded-full bg-amber-50 flex items-center justify-center shrink-0">
                 <Cpu className="text-amber-500" size={24} />
@@ -306,14 +370,16 @@ export default function AdminDashboard({ token, currentUserRole, onClose }: Admi
 
             <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm flex items-center justify-between">
               <div className="space-y-1">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">RAM Consumption</span>
-                <span className="text-2xl font-extrabold text-slate-800">{metrics.system.memory_percent}%</span>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Emails Sent</span>
+                <span className="text-2xl font-extrabold text-slate-800">
+                  {mailLogs.filter(m => m.status === 'success').length}
+                </span>
                 <span className="text-[10px] text-slate-500 block">
-                  {metrics.system.memory_used_mb}MB / {metrics.system.memory_total_mb}MB
+                  Out of {mailLogs.length} total attempts
                 </span>
               </div>
               <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center shrink-0">
-                <HardDrive className="text-blue-500" size={24} />
+                <Mail className="text-blue-500" size={24} />
               </div>
             </div>
 
@@ -327,220 +393,349 @@ export default function AdminDashboard({ token, currentUserRole, onClose }: Admi
                 <Database className="text-purple-500" size={24} />
               </div>
             </div>
+          </div>
+        )}
 
-            <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm flex items-center justify-between">
-              <div className="space-y-1">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Total Members</span>
-                <span className="text-2xl font-extrabold text-slate-800">{metrics.application.registered_users_count}</span>
-                <span className="text-[10px] text-slate-500 block">Registered Profiles</span>
+        {/* Tab Selection */}
+        <div className="flex border-b border-slate-250 space-x-6 pb-1">
+          <button
+            onClick={() => setActiveTab('users')}
+            className={`pb-2.5 text-xs font-bold uppercase tracking-wider transition-all border-b-2 outline-none ${
+              activeTab === 'users'
+                ? 'border-purple-650 text-purple-700'
+                : 'border-transparent text-slate-400 hover:text-slate-600'
+            }`}
+          >
+            User Directory Registry
+          </button>
+          <button
+            onClick={() => setActiveTab('logins')}
+            className={`pb-2.5 text-xs font-bold uppercase tracking-wider transition-all border-b-2 outline-none ${
+              activeTab === 'logins'
+                ? 'border-purple-650 text-purple-700'
+                : 'border-transparent text-slate-400 hover:text-slate-600'
+            }`}
+          >
+            Login Attempt Activity ({loginLogs.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('emails')}
+            className={`pb-2.5 text-xs font-bold uppercase tracking-wider transition-all border-b-2 outline-none ${
+              activeTab === 'emails'
+                ? 'border-purple-650 text-purple-700'
+                : 'border-transparent text-slate-400 hover:text-slate-600'
+            }`}
+          >
+            Email Communication Logs ({mailLogs.length})
+          </button>
+        </div>
+
+        {activeTab === 'users' && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fadeIn">
+            {/* User Directory Column */}
+            <div className="lg:col-span-2 space-y-6">
+              <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+                <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+                  <h3 className="font-bold text-xs text-slate-700 uppercase tracking-wider">User Directory Registry</h3>
+                  <span className="px-2 py-0.5 bg-slate-200 text-slate-700 text-[10px] font-bold rounded">
+                    {users.length} profiles
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-150 bg-slate-50 text-slate-400 font-bold uppercase text-[10px]">
+                        <th className="px-6 py-3 tracking-wider">Username</th>
+                        <th className="px-6 py-3 tracking-wider">Email Address</th>
+                        {isAdmin && <th className="px-6 py-3 tracking-wider">Password (Lookup)</th>}
+                        <th className="px-6 py-3 tracking-wider">Role</th>
+                        <th className="px-6 py-3 tracking-wider">Created Date</th>
+                        {isAdmin && <th className="px-6 py-3 tracking-wider text-right">Actions</th>}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-slate-650">
+                      {users.map((u) => (
+                        <tr key={u.id} className="hover:bg-slate-50 transition-colors">
+                          <td className="px-6 py-4 font-semibold text-slate-900">{u.username}</td>
+                          <td className="px-6 py-4 text-slate-500 font-medium">{u.email || 'N/A'}</td>
+                          {isAdmin && (
+                            <td className="px-6 py-4 text-purple-700 font-mono font-bold select-all bg-purple-50/30">
+                              {u.password || '••••••••'}
+                            </td>
+                          )}
+                          <td className="px-6 py-4">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                              u.role === 'admin' 
+                                ? 'bg-purple-100 text-purple-700 border border-purple-200' 
+                                : u.role === 'assistant'
+                                ? 'bg-blue-100 text-blue-700 border border-blue-200'
+                                : 'bg-slate-100 text-slate-600 border border-slate-200'
+                            }`}>
+                              {u.role}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-slate-400">
+                            {new Date(u.created_at).toLocaleDateString()}
+                          </td>
+                          {isAdmin && (
+                            <td className="px-6 py-4 text-right">
+                              <button
+                                onClick={() => handleDeleteUser(u.id, u.username)}
+                                className="p-2 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors inline-flex"
+                                title="Delete User"
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-              <div className="w-12 h-12 rounded-full bg-emerald-50 flex items-center justify-center shrink-0">
-                <User className="text-emerald-500" size={24} />
+
+              {/* Manually Add User Card (Only Admin) */}
+              {isAdmin && (
+                <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm">
+                  <h3 className="font-bold text-xs text-slate-700 uppercase tracking-wider flex items-center mb-4">
+                    <UserPlus size={16} className="text-purple-600 mr-1.5" />
+                    Add User or Assistant Profile
+                  </h3>
+
+                  {addError && (
+                    <div className="p-3 mb-4 bg-red-50 border border-red-100 text-red-700 rounded-xl text-xs flex items-center space-x-2">
+                      <ShieldAlert size={14} />
+                      <span>{addError}</span>
+                    </div>
+                  )}
+
+                  {addSuccess && (
+                    <div className="p-3 mb-4 bg-emerald-50 border border-emerald-100 text-emerald-700 rounded-xl text-xs flex items-center space-x-2">
+                      <Check size={14} />
+                      <span>{addSuccess}</span>
+                    </div>
+                  )}
+
+                  <form onSubmit={handleAddUser} className="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Username</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. assistant"
+                        value={newUsername}
+                        onChange={(e) => setNewUsername(e.target.value)}
+                        className="w-full border border-slate-200 outline-none focus:border-purple-600 rounded-lg p-2 text-xs"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Email Address</label>
+                      <input
+                        type="email"
+                        placeholder="e.g. assistant@mail.com"
+                        value={newEmail}
+                        onChange={(e) => setNewEmail(e.target.value)}
+                        className="w-full border border-slate-200 outline-none focus:border-purple-600 rounded-lg p-2 text-xs"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Password</label>
+                      <input
+                        type="password"
+                        placeholder="Enter password"
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        className="w-full border border-slate-200 outline-none focus:border-purple-600 rounded-lg p-2 text-xs"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Role Type</label>
+                      <select
+                        value={newRole}
+                        onChange={(e) => setNewRole(e.target.value as any)}
+                        className="w-full border border-slate-200 outline-none focus:border-purple-600 bg-white rounded-lg p-2 text-xs cursor-pointer"
+                      >
+                        <option value="user">Client (User)</option>
+                        <option value="assistant">Assistant</option>
+                      </select>
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="w-full py-2 px-4 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-bold text-xs transition-colors h-9"
+                    >
+                      Create Profile
+                    </button>
+                  </form>
+                </div>
+              )}
+            </div>
+
+            {/* Reset Request Center (Only Admin) */}
+            {isAdmin && (
+              <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden flex flex-col h-fit">
+                <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+                  <h3 className="font-bold text-xs text-slate-700 uppercase tracking-wider flex items-center">
+                    <Key size={15} className="mr-1.5 text-purple-600" />
+                    Password Reset Center
+                  </h3>
+                  <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-[10px] font-bold rounded">
+                    {resetRequests.filter((r) => r.status === 'pending').length} pending
+                  </span>
+                </div>
+
+                <div className="p-4 divide-y divide-slate-100 max-h-[400px] overflow-y-auto">
+                  {resetRequests.length === 0 ? (
+                    <p className="text-center text-slate-400 py-8 text-xs">No active reset requests.</p>
+                  ) : (
+                    resetRequests.map((req) => (
+                      <div key={req.id} className="py-3 flex items-center justify-between gap-2 text-xs">
+                        <div>
+                          <p className="font-semibold text-slate-800">{req.username}</p>
+                          <p className="font-mono text-purple-600 font-bold mt-0.5">{req.code}</p>
+                          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded mt-1.5 inline-block uppercase ${
+                            req.status === 'approved' 
+                              ? 'bg-emerald-100 text-emerald-700' 
+                              : 'bg-amber-100 text-amber-700'
+                          }`}>
+                            {req.status}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center space-x-1">
+                          {req.status === 'pending' && (
+                            <button
+                              onClick={() => handleApproveReset(req.id)}
+                              className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-600 rounded border border-emerald-250 transition-colors"
+                              title="Approve Reset"
+                            >
+                              <Check size={14} />
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleDenyReset(req.id)}
+                            className="p-1.5 bg-red-50 hover:bg-red-100 text-red-500 rounded border border-red-200 transition-colors"
+                            title="Reject / Delete Request"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'logins' && (
+          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden animate-fadeIn">
+            <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+              <h3 className="font-bold text-xs text-slate-700 uppercase tracking-wider">Login Attempt Activity Logs</h3>
+              <span className="px-2 py-0.5 bg-slate-200 text-slate-700 text-[10px] font-bold rounded">
+                {loginLogs.length} attempts
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-150 bg-slate-50 text-slate-400 font-bold uppercase text-[10px]">
+                    <th className="px-6 py-3 tracking-wider">Timestamp</th>
+                    <th className="px-6 py-3 tracking-wider">User / Input</th>
+                    <th className="px-6 py-3 tracking-wider">Status</th>
+                    <th className="px-6 py-3 tracking-wider">Details</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-650">
+                  {loginLogs.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="px-6 py-8 text-center text-slate-400">
+                        No login activity recorded yet.
+                      </td>
+                    </tr>
+                  ) : (
+                    loginLogs.map((log) => (
+                      <tr key={log.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="px-6 py-4 text-slate-400 font-medium">
+                          {new Date(log.timestamp).toLocaleString()}
+                        </td>
+                        <td className="px-6 py-4 font-semibold text-slate-900">{log.username}</td>
+                        <td className="px-6 py-4">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${
+                            log.status === 'success'
+                              ? 'bg-emerald-105 text-emerald-750 border-emerald-200'
+                              : 'bg-red-105 text-red-750 border-red-200'
+                          }`}>
+                            {log.status}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-slate-500 font-medium">{log.details}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* User Directory Column */}
-          <div className="lg:col-span-2 space-y-6">
-            <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-              <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
-                <h3 className="font-bold text-xs text-slate-700 uppercase tracking-wider">User Directory Registry</h3>
-                <span className="px-2 py-0.5 bg-slate-200 text-slate-700 text-[10px] font-bold rounded">
-                  {users.length} profiles
-                </span>
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead>
-                    <tr className="border-b border-slate-150 bg-slate-50 text-slate-400 font-bold uppercase text-[10px]">
-                      <th className="px-6 py-3 tracking-wider">Username</th>
-                      <th className="px-6 py-3 tracking-wider">Email Address</th>
-                      {isAdmin && <th className="px-6 py-3 tracking-wider">Password (Lookup)</th>}
-                      <th className="px-6 py-3 tracking-wider">Role</th>
-                      <th className="px-6 py-3 tracking-wider">Created Date</th>
-                      {isAdmin && <th className="px-6 py-3 tracking-wider text-right">Actions</th>}
+        {activeTab === 'emails' && (
+          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden animate-fadeIn">
+            <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+              <h3 className="font-bold text-xs text-slate-700 uppercase tracking-wider">Email Communication Logs</h3>
+              <span className="px-2 py-0.5 bg-slate-200 text-slate-700 text-[10px] font-bold rounded">
+                {mailLogs.length} attempts
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-150 bg-slate-50 text-slate-400 font-bold uppercase text-[10px]">
+                    <th className="px-6 py-3 tracking-wider">Timestamp</th>
+                    <th className="px-6 py-3 tracking-wider">Recipient Address</th>
+                    <th className="px-6 py-3 tracking-wider">Email Type</th>
+                    <th className="px-6 py-3 tracking-wider">Status</th>
+                    <th className="px-6 py-3 tracking-wider">Details</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-650">
+                  {mailLogs.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="px-6 py-8 text-center text-slate-400">
+                        No email activity recorded yet.
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-slate-650">
-                    {users.map((u) => (
-                      <tr key={u.id} className="hover:bg-slate-50 transition-colors">
-                        <td className="px-6 py-4 font-semibold text-slate-900">{u.username}</td>
-                        <td className="px-6 py-4 text-slate-500 font-medium">{u.email || 'N/A'}</td>
-                        {isAdmin && (
-                          <td className="px-6 py-4 text-purple-700 font-mono font-bold select-all bg-purple-50/30">
-                            {u.password || '••••••••'}
-                          </td>
-                        )}
+                  ) : (
+                    mailLogs.map((log) => (
+                      <tr key={log.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="px-6 py-4 text-slate-400 font-medium">
+                          {new Date(log.timestamp).toLocaleString()}
+                        </td>
+                        <td className="px-6 py-4 font-semibold text-slate-900">{log.recipient}</td>
+                        <td className="px-6 py-4 font-semibold text-purple-700">{log.type}</td>
                         <td className="px-6 py-4">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                            u.role === 'admin' 
-                              ? 'bg-purple-100 text-purple-700 border border-purple-200' 
-                              : u.role === 'assistant'
-                              ? 'bg-blue-100 text-blue-700 border border-blue-200'
-                              : 'bg-slate-100 text-slate-600 border border-slate-200'
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${
+                            log.status === 'success'
+                              ? 'bg-emerald-105 text-emerald-750 border-emerald-200'
+                              : 'bg-red-105 text-red-750 border-red-200'
                           }`}>
-                            {u.role}
+                            {log.status}
                           </span>
                         </td>
-                        <td className="px-6 py-4 text-slate-400">
-                          {new Date(u.created_at).toLocaleDateString()}
-                        </td>
-                        {isAdmin && (
-                          <td className="px-6 py-4 text-right">
-                            <button
-                              onClick={() => handleDeleteUser(u.id, u.username)}
-                              className="p-2 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors inline-flex"
-                              title="Delete User"
-                            >
-                              <Trash2 size={15} />
-                            </button>
-                          </td>
-                        )}
+                        <td className="px-6 py-4 text-slate-500 font-medium">{log.details}</td>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
-
-            {/* Manually Add User Card (Only Admin) */}
-            {isAdmin && (
-              <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm">
-                <h3 className="font-bold text-xs text-slate-700 uppercase tracking-wider flex items-center mb-4">
-                  <UserPlus size={16} className="text-purple-600 mr-1.5" />
-                  Add User or Assistant Profile
-                </h3>
-
-                {addError && (
-                  <div className="p-3 mb-4 bg-red-50 border border-red-100 text-red-700 rounded-xl text-xs flex items-center space-x-2">
-                    <ShieldAlert size={14} />
-                    <span>{addError}</span>
-                  </div>
-                )}
-
-                {addSuccess && (
-                  <div className="p-3 mb-4 bg-emerald-50 border border-emerald-100 text-emerald-700 rounded-xl text-xs flex items-center space-x-2">
-                    <Check size={14} />
-                    <span>{addSuccess}</span>
-                  </div>
-                )}
-
-                <form onSubmit={handleAddUser} className="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Username</label>
-                    <input
-                      type="text"
-                      placeholder="e.g. assistant"
-                      value={newUsername}
-                      onChange={(e) => setNewUsername(e.target.value)}
-                      className="w-full border border-slate-200 outline-none focus:border-purple-600 rounded-lg p-2 text-xs"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Email Address</label>
-                    <input
-                      type="email"
-                      placeholder="e.g. assistant@mail.com"
-                      value={newEmail}
-                      onChange={(e) => setNewEmail(e.target.value)}
-                      className="w-full border border-slate-200 outline-none focus:border-purple-600 rounded-lg p-2 text-xs"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Password</label>
-                    <input
-                      type="password"
-                      placeholder="Enter password"
-                      value={newPassword}
-                      onChange={(e) => setNewPassword(e.target.value)}
-                      className="w-full border border-slate-200 outline-none focus:border-purple-600 rounded-lg p-2 text-xs"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Role Type</label>
-                    <select
-                      value={newRole}
-                      onChange={(e) => setNewRole(e.target.value as any)}
-                      className="w-full border border-slate-200 outline-none focus:border-purple-600 bg-white rounded-lg p-2 text-xs cursor-pointer"
-                    >
-                      <option value="user">Client (User)</option>
-                      <option value="assistant">Assistant</option>
-                    </select>
-                  </div>
-
-                  <button
-                    type="submit"
-                    className="w-full py-2 px-4 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-bold text-xs transition-colors h-9"
-                  >
-                    Create Profile
-                  </button>
-                </form>
-              </div>
-            )}
           </div>
-
-          {/* Reset Request Center (Only Admin) */}
-          {isAdmin && (
-            <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden flex flex-col h-fit">
-              <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
-                <h3 className="font-bold text-xs text-slate-700 uppercase tracking-wider flex items-center">
-                  <Key size={15} className="mr-1.5 text-purple-600" />
-                  Password Reset Center
-                </h3>
-                <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-[10px] font-bold rounded">
-                  {resetRequests.filter((r) => r.status === 'pending').length} pending
-                </span>
-              </div>
-
-              <div className="p-4 divide-y divide-slate-100 max-h-[400px] overflow-y-auto">
-                {resetRequests.length === 0 ? (
-                  <p className="text-center text-slate-400 py-8 text-xs">No active reset requests.</p>
-                ) : (
-                  resetRequests.map((req) => (
-                    <div key={req.id} className="py-3 flex items-center justify-between gap-2 text-xs">
-                      <div>
-                        <p className="font-semibold text-slate-800">{req.username}</p>
-                        <p className="font-mono text-purple-600 font-bold mt-0.5">{req.code}</p>
-                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded mt-1.5 inline-block uppercase ${
-                          req.status === 'approved' 
-                            ? 'bg-emerald-100 text-emerald-700' 
-                            : 'bg-amber-100 text-amber-700'
-                        }`}>
-                          {req.status}
-                        </span>
-                      </div>
-
-                      <div className="flex items-center space-x-1">
-                        {req.status === 'pending' && (
-                          <button
-                            onClick={() => handleApproveReset(req.id)}
-                            className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-600 rounded border border-emerald-250 transition-colors"
-                            title="Approve Reset"
-                          >
-                            <Check size={14} />
-                          </button>
-                        )}
-                        <button
-                          onClick={() => handleDenyReset(req.id)}
-                          className="p-1.5 bg-red-50 hover:bg-red-100 text-red-500 rounded border border-red-200 transition-colors"
-                          title="Reject / Delete Request"
-                        >
-                          <X size={14} />
-                        </button>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          )}
-        </div>
+        )}
       </main>
     </div>
   );

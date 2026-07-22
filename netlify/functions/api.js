@@ -33,7 +33,8 @@ export async function handler(event, context) {
           hasNvidiaKey: !!process.env.NVIDIA_API_KEY,
           hasGroqKey: !!process.env.GROQ_API_KEY,
           hasOpenaiKey: !!process.env.OPENAI_API_KEY,
-          hasGeminiKey: !!process.env.GEMINI_API_KEY
+          hasGeminiKey: !!process.env.GEMINI_API_KEY,
+          hasOpenrouterKey: !!process.env.OPENROUTER_API_KEY
         })
       };
     }

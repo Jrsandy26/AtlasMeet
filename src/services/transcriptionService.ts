@@ -108,6 +108,40 @@ class TranscriptionService {
    * Transcribe the complete audio Blob using Groq Whisper API
    */
   async transcribeWithGroq(audioBlob: Blob, apiKey: string, model: string = 'whisper-large-v3-turbo'): Promise<string> {
+    const useProxy = !apiKey || apiKey === 'server';
+    if (useProxy) {
+      const reader = new FileReader();
+      const readPromise = new Promise<string>((resolve) => {
+        reader.onloadend = () => {
+          const resultStr = reader.result as string;
+          const base64Content = resultStr.split(',')[1] || '';
+          resolve(base64Content);
+        };
+        reader.readAsDataURL(audioBlob);
+      });
+      const audioBase64 = await readPromise;
+
+      const response = await fetch('/api/groq/transcribe', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          audioBase64,
+          model
+        })
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData?.detail || `Groq proxy transcription failed: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      return result.text;
+    }
+
     const formData = new FormData();
     formData.append('file', audioBlob, 'audio.webm');
     formData.append('model', model);

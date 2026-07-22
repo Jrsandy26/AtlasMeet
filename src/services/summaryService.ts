@@ -1,5 +1,5 @@
 export interface LLMConfig {
-  provider: 'ollama' | 'gemini' | 'openai' | 'groq' | 'nvidia';
+  provider: 'ollama' | 'gemini' | 'openai' | 'groq' | 'nvidia' | 'openrouter';
   model: string;
   apiKey: string;
   customEndpoint?: string;
@@ -54,6 +54,8 @@ class SummaryService {
         return this.callGroq(systemPrompt, userPrompt, config);
       case 'nvidia':
         return this.callNvidia(systemPrompt, userPrompt, config);
+      case 'openrouter':
+        return this.callOpenRouter(systemPrompt, userPrompt, config);
       default:
         throw new Error(`Unsupported AI provider: ${config.provider}`);
     }
@@ -142,7 +144,10 @@ class SummaryService {
   }
 
   private async callGroq(systemPrompt: string, userPrompt: string, config: LLMConfig): Promise<string> {
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    const useProxy = !config.apiKey || config.apiKey === 'server';
+    const url = useProxy ? '/api/groq/chat' : 'https://api.groq.com/openai/v1/chat/completions';
+
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -159,7 +164,7 @@ class SummaryService {
 
     if (!response.ok) {
       const errData = await response.json().catch(() => ({}));
-      throw new Error(errData?.error?.message || `Groq failed: ${response.statusText}`);
+      throw new Error(errData?.error?.message || errData?.detail || `Groq failed: ${response.statusText}`);
     }
 
     const data = await response.json();
@@ -221,6 +226,36 @@ class SummaryService {
     if (!response.ok) {
       const errData = await response.json().catch(() => ({}));
       throw new Error(errData?.detail || `NVIDIA NIM failed: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || '';
+  }
+
+  private async callOpenRouter(systemPrompt: string, userPrompt: string, config: LLMConfig): Promise<string> {
+    const useProxy = !config.apiKey || config.apiKey === 'server';
+    const url = useProxy ? '/api/openrouter/chat' : 'https://openrouter.ai/api/v1/chat/completions';
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${config.apiKey}`,
+        'HTTP-Referer': window.location.origin,
+        'X-Title': 'AtlasMeet'
+      },
+      body: JSON.stringify({
+        model: config.model || 'google/gemma-2-9b-it:free',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ]
+      }),
+    });
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData?.error?.message || errData?.detail || `OpenRouter failed: ${response.statusText}`);
     }
 
     const data = await response.json();
