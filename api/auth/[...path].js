@@ -8,6 +8,40 @@ function getSupabase() {
   return createClient(url, key);
 }
 
+/**
+ * Resolve path segments from Vercel catch-all OR from req.url directly.
+ * Vercel sets req.query.path for [...path] catch-alls, but rewrites can interfere.
+ * We always fall back to parsing req.url so routing is bulletproof.
+ *
+ * /api/auth/users          → ['users']
+ * /api/auth/users/123      → ['users', '123']
+ * /api/auth/login-logs     → ['login-logs']
+ */
+function getPathSegments(req) {
+  // Primary: Vercel catch-all query param
+  if (req.query && req.query.path) {
+    const p = Array.isArray(req.query.path) ? req.query.path : [req.query.path];
+    if (p.length > 0 && p[0]) return p;
+  }
+
+  // Fallback: parse from req.url directly
+  try {
+    const rawUrl = req.url || '';
+    const pathname = rawUrl.split('?')[0];
+    // Find everything after /auth/
+    const marker = '/auth/';
+    const idx = pathname.indexOf(marker);
+    if (idx !== -1) {
+      const after = pathname.slice(idx + marker.length);
+      return after.split('/').filter(Boolean);
+    }
+    // Handle bare /auth (no trailing slash / segment)
+    if (pathname.endsWith('/auth')) return [];
+  } catch (_) {}
+
+  return [];
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -15,18 +49,14 @@ export default async function handler(req, res) {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // Resolve the sub-path from the catch-all segment
-  // e.g. /api/auth/users -> ['users']
-  // e.g. /api/auth/users/123 -> ['users', '123']
-  const pathSegments = Array.isArray(req.query.path)
-    ? req.query.path
-    : req.query.path
-    ? [req.query.path]
-    : [];
-
+  const pathSegments = getPathSegments(req);
   const route = pathSegments[0] || '';
   const subId = pathSegments[1] || null;
   const method = req.method;
+
+  // ─── DEBUG HEADER (remove after confirming fix) ──────────────────────────────
+  res.setHeader('X-Auth-Route', route || '(empty)');
+  res.setHeader('X-Auth-Path', JSON.stringify(pathSegments));
 
   // ─── SMTP ROUTES (no Supabase needed) ───────────────────────────────────────
 
@@ -78,7 +108,9 @@ export default async function handler(req, res) {
 
   const supabase = getSupabase();
   if (!supabase) {
-    return res.status(500).json({ error: 'Supabase not initialized. Check SUPABASE_URL and SUPABASE_SECRET_KEY.' });
+    return res.status(500).json({
+      error: 'Supabase not initialized. Check SUPABASE_URL and SUPABASE_SECRET_KEY env vars in Vercel dashboard.'
+    });
   }
 
   try {
@@ -152,7 +184,11 @@ export default async function handler(req, res) {
       }
     }
 
-    return res.status(404).json({ error: `Unknown auth route: ${route}` });
+    return res.status(404).json({
+      error: `Unknown auth route: ${route}`,
+      debug: { url: req.url, segments: pathSegments, query: req.query }
+    });
+
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

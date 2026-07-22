@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { Analytics } from '@vercel/analytics/react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type TranscriptSegment, switchUserDatabase } from './db';
 import { recordingService, type RecordingState } from './services/recordingService';
@@ -3188,6 +3189,7 @@ export default function App() {
       )}
 
       {renderPostMeetingModal()}
+      <Analytics />
     </div>
   );
 }
