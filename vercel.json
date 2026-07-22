@@ -1,17 +1,8 @@
 {
   "version": 2,
   "functions": {
-    "api/auth/send-meeting-log.js": {
+    "api/auth/[...path].js": {
       "maxDuration": 30
-    },
-    "api/auth/send-otp.js": {
-      "maxDuration": 15
-    },
-    "api/auth/send-reset-code.js": {
-      "maxDuration": 15
-    },
-    "api/auth/send-invite.js": {
-      "maxDuration": 15
     }
   },
   "rewrites": [
